@@ -1,0 +1,41 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`golden: M0 single paragraph on a Letter page > produces one page and one full-text line box 1`] = `
+{
+  "breaks": [],
+  "lines": [
+    {
+      "baseline": 19.2,
+      "blockId": "p1",
+      "lineIndex": 0,
+      "pageIndex": 0,
+      "rangeEnd": 14,
+      "rangeStart": 0,
+      "rect": {
+        "height": 24,
+        "width": 624,
+        "x": 0,
+        "y": 0,
+      },
+    },
+  ],
+  "pages": [
+    {
+      "contentBox": {
+        "height": 864,
+        "width": 624,
+        "x": 96,
+        "y": 96,
+      },
+      "index": 0,
+      "size": {
+        "height": 1056,
+        "width": 816,
+        "x": 0,
+        "y": 0,
+      },
+    },
+  ],
+  "version": 1,
+}
+`;
