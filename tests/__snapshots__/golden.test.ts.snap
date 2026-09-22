@@ -1,5 +1,262 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`golden: 10-line fontSize-100 block across two pages (FakeMetrics) > slices 7 + 3 with one FragmentBreak 1`] = `
+{
+  "breaks": [
+    {
+      "atLine": 7,
+      "blockId": "p1",
+      "pageIndex": 1,
+    },
+  ],
+  "lines": [
+    {
+      "baseline": 85,
+      "blockId": "p1",
+      "lineIndex": 0,
+      "pageIndex": 0,
+      "rangeEnd": 59,
+      "rangeStart": 0,
+      "rect": {
+        "height": 110,
+        "width": 590,
+        "x": 0,
+        "y": 0,
+      },
+      "segments": [
+        {
+          "end": 59,
+          "runIndex": 0,
+          "start": 0,
+        },
+      ],
+    },
+    {
+      "baseline": 85,
+      "blockId": "p1",
+      "lineIndex": 1,
+      "pageIndex": 0,
+      "rangeEnd": 119,
+      "rangeStart": 60,
+      "rect": {
+        "height": 110,
+        "width": 590,
+        "x": 0,
+        "y": 110,
+      },
+      "segments": [
+        {
+          "end": 119,
+          "runIndex": 0,
+          "start": 60,
+        },
+      ],
+    },
+    {
+      "baseline": 85,
+      "blockId": "p1",
+      "lineIndex": 2,
+      "pageIndex": 0,
+      "rangeEnd": 179,
+      "rangeStart": 120,
+      "rect": {
+        "height": 110,
+        "width": 590,
+        "x": 0,
+        "y": 220,
+      },
+      "segments": [
+        {
+          "end": 179,
+          "runIndex": 0,
+          "start": 120,
+        },
+      ],
+    },
+    {
+      "baseline": 85,
+      "blockId": "p1",
+      "lineIndex": 3,
+      "pageIndex": 0,
+      "rangeEnd": 239,
+      "rangeStart": 180,
+      "rect": {
+        "height": 110,
+        "width": 590,
+        "x": 0,
+        "y": 330,
+      },
+      "segments": [
+        {
+          "end": 239,
+          "runIndex": 0,
+          "start": 180,
+        },
+      ],
+    },
+    {
+      "baseline": 85,
+      "blockId": "p1",
+      "lineIndex": 4,
+      "pageIndex": 0,
+      "rangeEnd": 299,
+      "rangeStart": 240,
+      "rect": {
+        "height": 110,
+        "width": 590,
+        "x": 0,
+        "y": 440,
+      },
+      "segments": [
+        {
+          "end": 299,
+          "runIndex": 0,
+          "start": 240,
+        },
+      ],
+    },
+    {
+      "baseline": 85,
+      "blockId": "p1",
+      "lineIndex": 5,
+      "pageIndex": 0,
+      "rangeEnd": 359,
+      "rangeStart": 300,
+      "rect": {
+        "height": 110,
+        "width": 590,
+        "x": 0,
+        "y": 550,
+      },
+      "segments": [
+        {
+          "end": 359,
+          "runIndex": 0,
+          "start": 300,
+        },
+      ],
+    },
+    {
+      "baseline": 85,
+      "blockId": "p1",
+      "lineIndex": 6,
+      "pageIndex": 0,
+      "rangeEnd": 419,
+      "rangeStart": 360,
+      "rect": {
+        "height": 110,
+        "width": 590,
+        "x": 0,
+        "y": 660,
+      },
+      "segments": [
+        {
+          "end": 419,
+          "runIndex": 0,
+          "start": 360,
+        },
+      ],
+    },
+    {
+      "baseline": 85,
+      "blockId": "p1",
+      "lineIndex": 7,
+      "pageIndex": 1,
+      "rangeEnd": 479,
+      "rangeStart": 420,
+      "rect": {
+        "height": 110,
+        "width": 590,
+        "x": 0,
+        "y": 0,
+      },
+      "segments": [
+        {
+          "end": 479,
+          "runIndex": 0,
+          "start": 420,
+        },
+      ],
+    },
+    {
+      "baseline": 85,
+      "blockId": "p1",
+      "lineIndex": 8,
+      "pageIndex": 1,
+      "rangeEnd": 539,
+      "rangeStart": 480,
+      "rect": {
+        "height": 110,
+        "width": 590,
+        "x": 0,
+        "y": 110,
+      },
+      "segments": [
+        {
+          "end": 539,
+          "runIndex": 0,
+          "start": 480,
+        },
+      ],
+    },
+    {
+      "baseline": 85,
+      "blockId": "p1",
+      "lineIndex": 9,
+      "pageIndex": 1,
+      "rangeEnd": 600,
+      "rangeStart": 540,
+      "rect": {
+        "height": 110,
+        "width": 600,
+        "x": 0,
+        "y": 220,
+      },
+      "segments": [
+        {
+          "end": 600,
+          "runIndex": 0,
+          "start": 540,
+        },
+      ],
+    },
+  ],
+  "pages": [
+    {
+      "contentBox": {
+        "height": 864,
+        "width": 624,
+        "x": 96,
+        "y": 96,
+      },
+      "index": 0,
+      "size": {
+        "height": 1056,
+        "width": 816,
+        "x": 0,
+        "y": 0,
+      },
+    },
+    {
+      "contentBox": {
+        "height": 864,
+        "width": 624,
+        "x": 96,
+        "y": 96,
+      },
+      "index": 1,
+      "size": {
+        "height": 1056,
+        "width": 816,
+        "x": 0,
+        "y": 0,
+      },
+    },
+  ],
+  "version": 1,
+}
+`;
+
 exports[`golden: single paragraph on a Letter page (FakeMetrics) > produces one page and one measured line box 1`] = `
 {
   "breaks": [],

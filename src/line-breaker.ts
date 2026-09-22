@@ -1,26 +1,35 @@
-import type { LineResult, LineSegment, Run, TextMetrics } from './types.js'
+import type { LineResult, LineSegment, Run, TextMetrics, TextStyle } from './types.js'
 
 // M1 greedy line breaker — deliberately simple: greedy fill; break at
 // spaces only; trim the space at the break; no hyphenation; hard-split
 // tokens longer than the line.
-// TODO(M2+): proper UAX #14 line breaking, whitespace collapsing,
+// TODO(M3+): proper UAX #14 line breaking, whitespace collapsing,
 // hyphenation, overflow policy.
 
 export function breakLines(
   runs: readonly Run[],
   metrics: TextMetrics,
   maxWidth: number,
+  baseStyle: TextStyle,
 ): LineResult[] {
   const concatenated = runs.map((run) => run.text).join('')
   const len = concatenated.length
 
   if (len === 0) {
-    // Known-wrong placeholder: empty line gets {height: 0, baseline: 0}
-    // because it has no runs to measure. Fix in M2: SemanticDoc gains
-    // baseStyle: TextStyle (supplied by the adapter); empty-line height/
-    // baseline fall back to baseStyle metrics. Width stays 0 (no glyphs).
-    // Do NOT fix by adding a default style inside the engine.
-    return [{ start: 0, end: 0, segments: [], width: 0, height: 0, baseline: 0 }]
+    // A line with no runs has no style of its own to measure, so its
+    // height/baseline fall back to the document baseStyle (REQUIRED,
+    // supplied by the adapter — defaults live at the edges, never in
+    // the engine). Fulfilled by M2 baseStyle. Width stays 0 (no glyphs).
+    const ascent = metrics.ascent(baseStyle)
+    const descent = metrics.descent(baseStyle)
+    return [{
+      start: 0,
+      end: 0,
+      segments: [],
+      width: 0,
+      height: ascent + descent,
+      baseline: ascent,
+    }]
   }
 
   // Absolute [start,end) of each run within the concatenated text.

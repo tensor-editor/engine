@@ -8,22 +8,29 @@ const maxWidth = 100
 
 const style: TextStyle = { fontFamily: 'sans-serif', fontSize: 16 }
 const bold: TextStyle = { fontFamily: 'sans-serif', fontSize: 16, bold: true }
+// Document default font: feeds empty-line metrics (M2 baseStyle).
+const baseStyle: TextStyle = { fontFamily: 'sans-serif', fontSize: 16 }
 
 const run = (text: string, s: TextStyle = style): Run => ({ text, style: s })
 
 describe('breakLines (M1 greedy breaker)', () => {
   it('empty runs produce exactly one empty line', () => {
     for (const runs of [[], [run('')]] as const) {
-      const lines = breakLines(runs, FakeMetrics, maxWidth)
+      const lines = breakLines(runs, FakeMetrics, maxWidth, baseStyle)
       expect(lines).toHaveLength(1)
       expect(lines[0].start).toBe(0)
       expect(lines[0].end).toBe(0)
       expect(lines[0].segments).toEqual([])
+      // M2 baseStyle: no runs to measure → baseStyle metrics.
+      // ascent 0.85 × 16 + descent 0.25 × 16 = 17.6; baseline 13.6.
+      expect(lines[0].width).toBe(0)
+      expect(lines[0].height).toBeCloseTo(17.6)
+      expect(lines[0].baseline).toBeCloseTo(13.6)
     }
   })
 
   it('text that fits produces a single line', () => {
-    const lines = breakLines([run('hi')], FakeMetrics, maxWidth)
+    const lines = breakLines([run('hi')], FakeMetrics, maxWidth, baseStyle)
     expect(lines).toHaveLength(1)
     expect(lines[0].start).toBe(0)
     expect(lines[0].end).toBe(2)
@@ -32,7 +39,7 @@ describe('breakLines (M1 greedy breaker)', () => {
 
   it('breaks at spaces, trims the break space, and keeps offsets contiguous', () => {
     const text = 'aaa bbb ccc'
-    const lines = breakLines([run(text)], FakeMetrics, maxWidth)
+    const lines = breakLines([run(text)], FakeMetrics, maxWidth, baseStyle)
 
     expect(lines.map((l) => [l.start, l.end])).toEqual([
       [0, 7], // "aaa bbb"
@@ -56,7 +63,7 @@ describe('breakLines (M1 greedy breaker)', () => {
   })
 
   it('preserves run boundaries across breaking', () => {
-    const lines = breakLines([run('foo', bold), run(' bar')], FakeMetrics, maxWidth)
+    const lines = breakLines([run('foo', bold), run(' bar')], FakeMetrics, maxWidth, baseStyle)
     expect(lines).toHaveLength(1)
     expect(lines[0].start).toBe(0)
     expect(lines[0].end).toBe(7)
@@ -67,7 +74,7 @@ describe('breakLines (M1 greedy breaker)', () => {
   })
 
   it('hard-splits an unbroken overlong token at the overflow char', () => {
-    const lines = breakLines([run('abcdefghijklmno')], FakeMetrics, maxWidth)
+    const lines = breakLines([run('abcdefghijklmno')], FakeMetrics, maxWidth, baseStyle)
     expect(lines.map((l) => [l.start, l.end])).toEqual([
       [0, 10],
       [10, 15],

@@ -63,9 +63,37 @@ export interface LineResult {
   baseline: number
 }
 
+/**
+ * Per-block flow control. Field names deliberately mirror OOXML
+ * (w:keepNext, w:keepLines, ...) for a future DOCX round-trip.
+ */
+export interface FlowPolicy {
+  /**
+   * Atomic placement: never split this block across pages. Blocks taller
+   * than a page still fragment — you can't keep together what can't fit
+   * together.
+   */
+  keepLines?: boolean
+  /**
+   * Widow/orphan protection for this block. Overrides the DOCUMENT-LEVEL
+   * DEFAULT (LayoutOptions.preventWidowsAndOrphans). false = natural
+   * split (no boundary adjustments).
+   */
+  widowControl?: boolean
+  /** M2.5 — not yet implemented; a genuinely set value throws. */
+  keepNext?: boolean
+  /** M2.5 — not yet implemented; a genuinely set value throws. */
+  keepPrevious?: boolean
+  /** M2.5 — not yet implemented; a genuinely set value throws. */
+  breakBefore?: 'page' | null
+  /** M2.5 — not yet implemented; a genuinely set value throws. */
+  breakAfter?: 'page' | null
+}
+
 export interface BlockBase {
   id: string
   kind: 'paragraph' | 'heading'
+  flow?: FlowPolicy
 }
 
 export interface ParagraphBlock extends BlockBase {
@@ -83,17 +111,30 @@ export type Block = ParagraphBlock | HeadingBlock
 
 export interface SemanticDoc {
   blocks: Block[]
+  /**
+   * REQUIRED document default font, supplied by the adapter — defaults
+   * live at the edges, never in the engine. Feeds empty-line metrics (a
+   * line with no runs has no style of its own to measure).
+   */
+  baseStyle: TextStyle
 }
 
 export interface LayoutOptions {
   page: { width: number; height: number }
   margins: { top: number; right: number; bottom: number; left: number }
+  /**
+   * DOCUMENT-LEVEL DEFAULT for widow/orphan protection. Default true
+   * when omitted; per-block flow.widowControl overrides this.
+   */
+  preventWidowsAndOrphans?: boolean
 }
 
 export interface PageGeometry {
   index: number
   size: Rect
   contentBox: Rect
+  // M2: all pages share opts geometry. TODO(sections): per-section
+  // page descriptors.
 }
 
 export interface LineBox {
@@ -128,8 +169,15 @@ export interface LineBox {
 
 export interface FragmentBreak {
   blockId: string
-  /** Edit survival: a positional line ordinal, recomputed on every layout. */
+  /**
+   * Edit survival: a positional line ordinal, recomputed on every layout.
+   * Pin: emitted ONLY when a block splits mid-block. atLine = the
+   * lineIndex of the block's first line on pageIndex (the line that
+   * begins the new page); atLine >= 1 always. A block pushed wholly to
+   * a new page emits NO FragmentBreak.
+   */
   atLine: number
+  /** Index of the page the continuation begins on. */
   pageIndex: number
 }
 

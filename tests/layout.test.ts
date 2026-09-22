@@ -4,8 +4,9 @@ import { FakeMetrics } from './fake-metrics.js'
 import type { LayoutOptions, SemanticDoc, TextStyle } from '../src/index.js'
 
 const style: TextStyle = { fontFamily: 'sans-serif', fontSize: 16 }
+const baseStyle: TextStyle = { fontFamily: 'sans-serif', fontSize: 16 }
 
-// Letter page, 96px margins → contentBox width 624 (62 chars at 10px).
+// Letter page, 96px margins → contentBox 624 (62 chars at 10px).
 const opts: LayoutOptions = {
   page: { width: 816, height: 1056 },
   margins: { top: 96, right: 96, bottom: 96, left: 96 },
@@ -18,6 +19,7 @@ describe('createLayoutEngine (M1 measured layout)', () => {
     // break space; the remaining 8 words (39 chars) form line 2.
     const text = Array.from({ length: 20 }, (_, i) => (i === 0 ? 'word' : ' word')).join('')
     const doc: SemanticDoc = {
+      baseStyle,
       blocks: [
         { id: 'p1', kind: 'paragraph', runs: [{ text, style }] },
         { id: 'p2', kind: 'paragraph', runs: [{ text: 'hi', style }] },
@@ -59,15 +61,12 @@ describe('createLayoutEngine (M1 measured layout)', () => {
     expect(line2.rect.y).toBeCloseTo(35.2)
   })
 
-  it('gives an empty paragraph a zero-size placeholder line', () => {
-    // Known-wrong placeholder: empty line gets {width: 0, height: 0,
-    // baseline: 0} because it has no runs to measure. Fix in M2:
-    // SemanticDoc gains baseStyle: TextStyle (supplied by the adapter);
-    // empty-line height/baseline fall back to baseStyle metrics. Width
-    // stays 0 (no glyphs). Do NOT fix by adding a default style inside
-    // the engine. This test pins the placeholder so the M2 fix shows up
-    // as a deliberate red → green, not a silent change.
-    const doc: SemanticDoc = { blocks: [{ id: 'p1', kind: 'paragraph', runs: [] }] }
+  it('gives an empty paragraph a baseStyle-measured placeholder line', () => {
+    // Fulfilled by M2 baseStyle: a line with no runs falls back to the
+    // document baseStyle (REQUIRED, supplied by the adapter — defaults
+    // live at the edges, never in the engine) for height/baseline.
+    // Width stays 0 (no glyphs). This test pins the behavior.
+    const doc: SemanticDoc = { baseStyle, blocks: [{ id: 'p1', kind: 'paragraph', runs: [] }] }
 
     const { layout } = createLayoutEngine({ metrics: FakeMetrics })
     const result = layout(doc, opts)
@@ -79,9 +78,10 @@ describe('createLayoutEngine (M1 measured layout)', () => {
       pageIndex: 0,
       rangeStart: 0,
       rangeEnd: 0,
-      baseline: 0,
       segments: [],
     })
-    expect(result.lines[0].rect).toEqual({ x: 0, y: 0, width: 0, height: 0 })
+    expect(result.lines[0].baseline).toBeCloseTo(13.6)
+    expect(result.lines[0].rect).toMatchObject({ x: 0, y: 0, width: 0 })
+    expect(result.lines[0].rect.height).toBeCloseTo(17.6)
   })
 })
