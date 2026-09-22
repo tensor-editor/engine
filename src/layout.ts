@@ -3,12 +3,10 @@ import type {
   FragmentBreak,
   LayoutEngine,
   LayoutOptions,
-  LayoutResult,
   LastStats,
   LineBox,
   LineResult,
   PageGeometry,
-  ParagraphBlock,
   Rect,
   SemanticDoc,
   TextMetrics,
@@ -84,11 +82,66 @@ import { breakLines } from './line-breaker.js'
 //    new metrics requires a new engine.
 //  - Stats hygiene: lastStats is rebuilt from scratch on every call —
 //    never accumulated (a stale counter would make the scripted
-//    "walked 1 / spliced 49" lie). cacheEpoch persists across calls
-//    but resets to 0 in a fresh engine.
+//    counts lie). cacheEpoch persists across calls but resets to 0 in
+//    a fresh engine.
 //  - IMMOVABILITY (enforced): emitted LineBox/FragmentBreak/PageGeometry
 //    records are Object.freeze'd at creation — zero-copy sharing with
 //    copying's safety at none of the cost.
+//
+// M2.5 FLOW POLICY — the last loud seams close. Word-exact boundary
+// bonds, forced page breaks, real heading layout (headings route
+// through breakLines exactly like paragraphs; TODO(M4): level-based
+// default styles arrive from the ADAPTER — level is not a layout
+// input here).
+//
+//  - BOND(A→B) ⇔ A's last line and B's first line share a page. One
+//    mechanism, two spellings: flow.keepNext on A or flow.keepPrevious
+//    on B; null counts as UNSET at every use site (PM attribute JSON
+//    round-trips use null for absent attrs). Detection happens at A's
+//    placement via a LOOKAHEAD of B's first-line height (firstLineLands
+//    below — the exact same rules the walk applies), fetched from
+//    lineCache/breakLines on demand (the cache absorbs it).
+//  - ENFORCEMENT SHAPES (bounded: ONE attempt per bond per call; the
+//    R6 floor stands):
+//      violated + A fits a fresh page + A entered mid-page (y > 0) →
+//        move A's start (R1 shape).
+//      A tall → back A's FINAL split point up one line, floor 1 line
+//        (R3 shape) — A's last line joins B's page.
+//      Vacuous move (A already starts a fresh page), floor hit, or
+//        still violated after the attempt → the bond DROPS. A stays at
+//        the moved page per the (f) ruling — no revert; the move was
+//        unproductive but deterministic.
+//  - SHAPE-1 MOVES CASCADE BACKWARD: moving B for bond(B→C)
+//    retro-violates bond(A→B) → A enforces in turn, re-flowing the
+//    chain. Cascade floor: the head already starts a fresh page →
+//    drop the EARLIEST bond — honor the maximal SUFFIX (drop earliest
+//    first). "Tensor's pinned choice — Word's exact tie-break here is
+//    undocumented; this is our spec of record."
+//  - PRECEDENCE (pinned): structural forced breaks > orphan move (R2)
+//    > bond > widow adjust (R3), applied as a bounded re-check loop
+//    (each adjustment re-runs the checks; terminates via R6).
+//    R-ATOMIC sits with orphan in tier 2 (a successor start-move); the
+//    bond then cascades the predecessor, bounded. Bond preempts R3:
+//    when the bond already relocates A's last line onto B's page, the
+//    widow concern is void — a STRUCTURALLY DROPPED bond does NOT
+//    preempt (control returns to R3; pinned by flow.test.ts).
+//  - STRUCTURAL DROP: a bond at a boundary carrying a forced break —
+//    breakBefore(B) OR breakAfter(A), symmetric, both spellings —
+//    drops at detection, loudly: a page that must start with B cannot
+//    also start with A's last fragment.
+//  - FORCED BREAKS: breakBefore closes a non-fresh page before the
+//    block (fresh start = no-op); breakAfter closes after the block.
+//    A closed page always holds content — never an empty page; a
+//    trailing close never materializes (pages derive from the max line
+//    pageIndex). Forced breaks emit NO FragmentBreak (not mid-block
+//    splits).
+//  - CACHE: the resume point extends BACKWARD through bonded chains —
+//    a bonded predecessor's placement consumed its successor's
+//    first-line height, so an edit inside the successor can invalidate
+//    the predecessor's cached placement; blocksWalked counts the
+//    re-walked bonded predecessors. Splices never cross a
+//    breakBefore(B) boundary (the gate's state equality fails; the
+//    walk re-applies the close) — conservative, safe.
 
 // Walk state: (pageIndex, yCursor) at block entry. The unit of the
 // Markov property — nothing else persists across block boundaries.
@@ -97,8 +150,13 @@ interface WalkState {
   y: number
 }
 
-// Per-block walk cache, in doc order. The chain invariant holds by
-// construction: entry[i+1] == exit[i] for consecutive entries.
+// Per-block walk cache, in doc order. exit[i] is the MACHINE exit;
+// entry[i+1] = exit[i] plus the walk's cursor transforms (a breakAfter
+// close on i, and/or a breakBefore close on i+1). Every path that
+// resumes the cursor from a cached exit re-applies those closes via
+// cursorAfter. Splice gates compare transformed cursors, so a
+// breakBefore(B) boundary fails the gate safely (the walk re-applies
+// the close) while breakAfter boundaries splice through.
 interface WalkCacheEntry {
   blockId: string
   contentHash: string
@@ -139,9 +197,8 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
 
   return {
     layout(doc, opts) {
-      // Loud seams, upfront — before any cache work.
+      // Loud adapter contract, upfront — before any cache work.
       validateDuplicateIds(doc)
-      validateFlow(doc)
 
       // Stats hygiene: rebuilt from scratch every call, never
       // accumulated — a stale counter would make the scripted counts lie.
@@ -201,6 +258,19 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
         }
       }
 
+      // M2.5 BACKWARD-RESUME through bonded chains: a bonded
+      // predecessor's placement consumed its successor's first-line
+      // height (the bond lookahead), so an edit inside the successor
+      // can invalidate the predecessor's cached placement — extend the
+      // resume point BACKWARD while blocks[resume-1] bonds to
+      // blocks[resume]. Flag-level (conservative: a structurally
+      // dropped bond still extends — a spurious extension only
+      // re-walks, never mis-splices). blocksWalked counts the re-walked
+      // bonded predecessors.
+      while (resume > 0 && bondExistsBetween(doc, resume - 1)) {
+        resume -= 1
+      }
+
       const lines: LineBox[] = []
       const breaks: FragmentBreak[] = []
       const newCache: WalkCacheEntry[] = []
@@ -212,58 +282,222 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
         breaks.push(...oldCache[i].breaks)
         newCache.push(oldCache[i])
       }
-      let state: WalkState =
-        resume > 0 ? oldCache[resume - 1].exitState : { pageIndex: 0, y: 0 }
 
+      // The walk state entering block `resume`, reconstructed from the
+      // prefix: the predecessor's machine exit plus its breakAfter
+      // close (a cursor transform).
+      const startState: WalkState = (() => {
+        if (resume === 0) return { pageIndex: 0, y: 0 }
+        return cursorAfter(doc.blocks[resume - 1], oldCache[resume - 1].exitState)
+      })()
+
+      const walked = new Set<number>()
+      // Bounded enforcement: one attempt per bond (keyed by the
+      // predecessor's index) per call.
+      const bondAttempts = new Set<number>()
+
+      const getLines = (index: number): LineResult[] => {
+        const block = doc.blocks[index]
+        const cached = lineCache.get(block.id)
+        const hash = hashes[index]
+        if (cached && cached.contentHash === hash && cached.maxWidth === contentBox.width) {
+          return cached.lines
+        }
+        const results = breakLines(block.runs, metrics, contentBox.width, doc.baseStyle)
+        lineCache.set(block.id, {
+          contentHash: hash,
+          maxWidth: contentBox.width,
+          lines: results,
+        })
+        stats.linesRebroken += 1
+        return results
+      }
+
+      const controlOf = (block: Block): boolean =>
+        block.flow?.widowControl ?? opts.preventWidowsAndOrphans ?? true
+
+      // Truncate the walk to index i (popping re-placed blocks' outputs)
+      // and commit the entry — cascade unwinds go through here.
+      const commit = (index: number, entry: WalkCacheEntry): void => {
+        while (newCache.length > index) {
+          const popped = newCache.pop()!
+          lines.length -= popped.lineBoxes.length
+          breaks.length -= popped.breaks.length
+        }
+        newCache.push(entry)
+        lines.push(...entry.lineBoxes)
+        breaks.push(...entry.breaks)
+      }
+
+      let state: WalkState = startState
       let i = resume
       while (i < doc.blocks.length) {
         const block = doc.blocks[i]
+
+        // STRUCTURAL TIER (precedence 1): breakBefore closes a
+        // non-fresh page; a fresh-page start is a no-op. Emits no
+        // FragmentBreak (not a mid-block split).
+        if (block.flow?.breakBefore === 'page' && state.y > 0) {
+          state = { pageIndex: state.pageIndex + 1, y: 0 }
+        }
+
+        // M2.5: headings route through breakLines exactly like
+        // paragraphs — E6 (heading entries in the walk cache) became
+        // load-bearing. TODO(M4): level-based default styles arrive
+        // from the ADAPTER; level is not a layout input here.
         const entryState = state
+        const results = getLines(i)
+        const control = controlOf(block)
+        const next = doc.blocks[i + 1]
+        const bondExists =
+          next !== undefined &&
+          (block.flow?.keepNext === true || next.flow?.keepPrevious === true)
+        const structural =
+          bondExists &&
+          (block.flow?.breakAfter === 'page' || next.flow?.breakBefore === 'page')
+        const bonded = bondExists && !structural
 
-        if (block.kind !== 'paragraph') {
-          // TODO(M4): headings emit no lines yet; when they do, E6
-          // (heading entries in the walk cache) becomes load-bearing.
-          newCache.push({
-            blockId: block.id,
-            contentHash: hashes[i],
-            entryState,
-            lineBoxes: [],
-            breaks: [],
-            exitState: entryState,
-          })
-          i += 1
-          continue
+        let currentEntry = entryState
+        let placed = placeBlock(
+          block, results, currentEntry, contentBox.height, control, bonded, false,
+        )
+        let movedViaShape1 = false
+
+        if (structural) {
+          // STRUCTURAL DROP (loud): breakBefore(B) or breakAfter(A) —
+          // both spellings, symmetric — puts a forced break at the A→B
+          // boundary. A page that must start with B cannot also start
+          // with A's last fragment; the bond drops at detection, no
+          // enforcement attempt. The drop does NOT preempt R3 (bonded
+          // is false above): control returns to the widow rule —
+          // pinned by the composed flow test (6/2, never 7/1).
+        } else if (bonded) {
+          // BOND LOOKAHEAD — A's placement consumes B's first-line
+          // height via firstLineLands, the exact same rules the walk
+          // applies (see its comment for the full arm list).
+          const nextLines = getLines(i + 1)
+          if (
+            !firstLineLands(next, nextLines, placed.exitState, contentBox.height, controlOf(next))
+          ) {
+            if (!bondAttempts.has(i)) {
+              bondAttempts.add(i)
+              const fitsFresh =
+                countFitting(results, 0, contentBox.height) === results.length
+              if (fitsFresh && entryState.y > 0) {
+                // SHAPE 1 (R1 shape): move A's start to the fresh page.
+                currentEntry = { pageIndex: entryState.pageIndex + 1, y: 0 }
+                placed = placeBlock(
+                  block, results, currentEntry, contentBox.height, control, bonded, false,
+                )
+                movedViaShape1 = true
+                // Still violated → bounded drop. A stays at the moved
+                // page per the (f) ruling — no revert; the move was
+                // unproductive but deterministic.
+              } else if (!fitsFresh) {
+                // SHAPE 2 (R3 shape): A tall → back the FINAL split
+                // point up one line; A's last line joins B's page.
+                // Floor: a single-line final fragment cannot back up
+                // (placeBlock places it naturally) → bounded drop.
+                placed = placeBlock(
+                  block, results, currentEntry, contentBox.height, control, bonded, true,
+                )
+              }
+              // else: fitsFresh && entryState.y === 0 → VACUOUS
+              // (impossible-after-move family): A already starts a
+              // fresh page; moving re-creates the same situation
+              // forever → the bond drops.
+            }
+            // else: the attempt was already used this call → bounded
+            // drop (pinned by the composed R2-re-fire flow test).
+          }
         }
 
-        // Line-level reuse: hash + maxWidth re-validated.
-        const cached = lineCache.get(block.id)
-        let results: LineResult[]
-        if (cached && cached.contentHash === hashes[i] && cached.maxWidth === contentBox.width) {
-          results = cached.lines
-        } else {
-          results = breakLines(block.runs, metrics, contentBox.width, doc.baseStyle)
-          lineCache.set(block.id, {
-            contentHash: hashes[i],
-            maxWidth: contentBox.width,
-            lines: results,
-          })
-          stats.linesRebroken += 1
-        }
-
-        const control = block.flow?.widowControl ?? opts.preventWidowsAndOrphans ?? true
-        const placed = placeBlock(block, results, entryState, contentBox.height, control)
-        stats.blocksWalked += 1
-        lines.push(...placed.lineBoxes)
-        breaks.push(...placed.breaks)
-        newCache.push({
+        commit(i, {
           blockId: block.id,
           contentHash: hashes[i],
-          entryState,
+          entryState: currentEntry,
           lineBoxes: placed.lineBoxes,
           breaks: placed.breaks,
           exitState: placed.exitState,
         })
+        if (!walked.has(i)) {
+          walked.add(i)
+          stats.blocksWalked += 1
+        }
         state = placed.exitState
+
+        // STRUCTURAL: breakAfter closes the page after the block — the
+        // closed page always holds this block's lines, never an empty
+        // page; a trailing close never materializes a phantom page
+        // (pages derive from the max line pageIndex). Emits no
+        // FragmentBreak.
+        if (block.flow?.breakAfter === 'page') {
+          state = { pageIndex: state.pageIndex + 1, y: 0 }
+        }
+
+        // BACKWARD CASCADE (shape-1 moves only — shape 2 moves no
+        // start): moving B for bond(B→C) retro-violates bond(A→B); the
+        // predecessor enforces in turn. Bounded: one attempt per bond;
+        // the chain re-flows from the unwind point.
+        if (movedViaShape1 && i > resume) {
+          const prev = doc.blocks[i - 1]
+          const prevEntry = newCache[i - 1]
+          const prevBondActive =
+            (prev.flow?.keepNext === true || block.flow?.keepPrevious === true) &&
+            prev.flow?.breakAfter !== 'page' &&
+            block.flow?.breakBefore !== 'page'
+          if (
+            prevBondActive &&
+            placed.lineBoxes[0].pageIndex !==
+              prevEntry.lineBoxes[prevEntry.lineBoxes.length - 1].pageIndex
+          ) {
+            // bond (i-1 → i) violated → predecessor enforcement (one
+            // attempt, keyed i-1).
+            if (!bondAttempts.has(i - 1)) {
+              const prevResults = getLines(i - 1)
+              const prevFitsFresh =
+                countFitting(prevResults, 0, contentBox.height) === prevResults.length
+              const prevEntryState = prevEntry.entryState
+              if (prevFitsFresh && prevEntryState.y > 0) {
+                bondAttempts.add(i - 1)
+                // Unwind: close the predecessor's entry page, re-place
+                // it fresh; the loop re-flows the chain from there.
+                i -= 1
+                state = { pageIndex: prevEntryState.pageIndex + 1, y: 0 }
+                continue
+              }
+              if (!prevFitsFresh) {
+                // Predecessor tall → SHAPE 2 in place: its final split
+                // backs up one line to join block i's fresh page. No
+                // start moved → no further cascade.
+                bondAttempts.add(i - 1)
+                const prevPlaced = placeBlock(
+                  prev,
+                  prevResults,
+                  prevEntryState,
+                  contentBox.height,
+                  controlOf(prev),
+                  true,
+                  true,
+                )
+                commit(i - 1, {
+                  blockId: prev.id,
+                  contentHash: hashes[i - 1],
+                  entryState: prevEntryState,
+                  lineBoxes: prevPlaced.lineBoxes,
+                  breaks: prevPlaced.breaks,
+                  exitState: prevPlaced.exitState,
+                })
+                state = prevPlaced.exitState
+                continue // the loop re-places block i from the new state
+              }
+              // else: the predecessor already starts a fresh page —
+              // vacuous. Drop the EARLIEST bond (maximal-suffix
+              // give-up); block i stays at its moved position.
+            }
+            // else: bounded drop (attempt used).
+          }
+        }
 
         // SPLICE GATE. Consume cached entries while (entry state AND
         // id AND contentHash) verify. PROOF-PINNING: exact === on the
@@ -275,6 +509,7 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
         // is the tripwire. A gate FAILING on reordered accumulation is
         // merely a missed splice (safe); a gate passing on unequal
         // states is impossible under ===.
+        const preSpliceState = state
         let j = i + 1
         while (
           j < doc.blocks.length &&
@@ -286,9 +521,39 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
           lines.push(...oldCache[j].lineBoxes)
           breaks.push(...oldCache[j].breaks)
           newCache.push(oldCache[j])
-          state = oldCache[j].exitState
+          // CURSOR RECONSTRUCTION: the cached exitState is the MACHINE
+          // exit — a breakAfter close is a cursor transform applied by
+          // the walk AFTER placement, not part of the record. Every
+          // path that resumes the cursor from a cached exit must
+          // re-apply the close, or the next block enters a stale
+          // mid-page state.
+          state = cursorAfter(doc.blocks[j], oldCache[j].exitState)
           stats.blocksSpliced += 1
           j += 1
+        }
+        // The splice may not END on a bonded predecessor: its cached
+        // placement consumed its successor's first-line height (the
+        // bond lookahead), and the successor was NOT spliced — it
+        // changed (or ended the run), so that context is stale. Un-
+        // consume trailing bonded entries; the walk re-places them
+        // with a fresh lookahead. Symmetric with the backward-resume
+        // rule at the prefix boundary.
+        while (j - 1 > i && bondExistsBetween(doc, j - 1)) {
+          const popped = newCache.pop()!
+          lines.length -= popped.lineBoxes.length
+          breaks.length -= popped.breaks.length
+          stats.blocksSpliced -= 1
+          j -= 1
+        }
+        if (j > i + 1) {
+          // Remaining consumed entries chain exactly to the current
+          // cursor (breakAfter closes re-applied).
+          state = cursorAfter(doc.blocks[j - 1], newCache[newCache.length - 1].exitState)
+        } else {
+          // Nothing consumed (or all un-consumed): restore the
+          // pre-splice cursor (includes a possible breakAfter close —
+          // not recoverable from newCache's machine exits).
+          state = preSpliceState
         }
         i = j
       }
@@ -323,15 +588,76 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
   }
 }
 
+// BOND LOOKAHEAD — predicts whether a block's FIRST line lands on the
+// entry page, mirroring the placement machine's start decisions
+// EXACTLY. The prediction must mirror "the same rules the walk
+// applies" completely, or it isn't exact; every arm is listed:
+//   - structural breakBefore: y > 0 → the page closes → next page.
+//   - R0: the whole block fits → stays.
+//   - fits == 0: y > 0 → R1 closes → next page; y == 0 → R6 places
+//     the first line by fiat on the entry page → STAYS (degenerate: a
+//     single line taller than the page still lands on the entry page —
+//     the bond HOLDS).
+//   - R2 orphan: fits == 1 && n > 1 && control && y > 0 → next page.
+//   - R-ATOMIC: keepLines && n <= cap while the block doesn't fit →
+//     next page (cannot fire at y == 0: n <= cap means a fresh page
+//     fits the whole block, so R0 already fired).
+//   - otherwise: R3-adjusted/R5 splits place fits >= 1 FIRST lines on
+//     the entry page → stays (R3 never moves the start).
+function firstLineLands(
+  block: Block,
+  lines: readonly LineResult[],
+  entry: WalkState,
+  contentHeight: number,
+  control: boolean,
+): boolean {
+  if (block.flow?.breakBefore === 'page' && entry.y > 0) return false
+  const n = lines.length
+  const fits = countFitting(lines, 0, contentHeight - entry.y)
+  if (fits >= n) return true
+  if (fits === 0) return entry.y === 0
+  if (fits === 1 && n > 1 && control && entry.y > 0) return false
+  const cap = countFitting(lines, 0, contentHeight)
+  if (block.flow?.keepLines === true && n <= cap) return false
+  return true
+}
+
+// Cursor reconstruction: the walk applies a block's breakAfter close
+// AFTER placement as a cursor transform — the cached exitState is the
+// MACHINE exit. Every path that resumes the cursor from a cached exit
+// must re-apply the close, or the next block enters a stale mid-page
+// state (a parity bug the fuzzer caught).
+function cursorAfter(block: Block, exit: WalkState): WalkState {
+  if (block.flow?.breakAfter === 'page') {
+    return { pageIndex: exit.pageIndex + 1, y: 0 }
+  }
+  return exit
+}
+
+// Bond flags between blocks[i] and blocks[i+1] (either spelling).
+function bondExistsBetween(doc: SemanticDoc, i: number): boolean {
+  const a = doc.blocks[i]
+  const b = doc.blocks[i + 1]
+  if (a === undefined || b === undefined) return false
+  return a.flow?.keepNext === true || b.flow?.keepPrevious === true
+}
+
 // The M2 placement machine. PURE: a function of (block, LineResults,
-// entry state, content-box height, widow control) — the Markov property
-// made physically true of the code.
+// entry state, content-box height, widow control, bond context, split
+// backup) — the Markov property made physically true of the code.
+// `bonded` (an ACTIVE bond to the successor) preempts R3: when the
+// bond already relocates A's last line onto B's page, the widow
+// concern is void. `backupFinalSplit` is the one-shot shape-2 hook:
+// the FINAL fragment places one line fewer, so A's last line opens
+// the successor's page.
 function placeBlock(
-  block: ParagraphBlock,
+  block: Block,
   results: readonly LineResult[],
   entryState: WalkState,
   contentHeight: number,
   control: boolean,
+  bonded: boolean,
+  backupFinalSplit: boolean,
 ): { lineBoxes: LineBox[]; breaks: FragmentBreak[]; exitState: WalkState } {
   const L = results.length
   // How many of THIS block's lines a fresh page holds — only the R4
@@ -371,6 +697,15 @@ function placeBlock(
     let fits = countFitting(results, k, contentHeight - y)
 
     if (fits >= n) {
+      if (backupFinalSplit && n > 1) {
+        // SHAPE 2 (R3 shape): back the FINAL split point up one line —
+        // A's last line opens the successor's page.
+        place(k, n - 1)
+        k += n - 1
+        breaks.push(Object.freeze({ blockId: block.id, atLine: k, pageIndex: pageIndex + 1 }))
+        closePage()
+        continue
+      }
       place(k, n) // R0
       k = L
       continue
@@ -394,8 +729,8 @@ function placeBlock(
       continue
     }
 
-    if (control && n - fits === 1 && fits > 1) {
-      fits -= 1 // R3 widow
+    if (control && !bonded && n - fits === 1 && fits > 1) {
+      fits -= 1 // R3 widow (bond preempts when ACTIVE)
       if (fits === 1 && y > 0 && n > 1) {
         closePage() // re-check R2 (inherits its y > 0 guard)
         continue
@@ -429,9 +764,9 @@ function sameState(a: WalkState, b: WalkState): boolean {
 }
 
 // contentHash covers everything that determines a block's lines and
-// placement: kind (paragraph lines up, headings do not), runs
-// (text + style), and flow (keepLines/widowControl move the rules).
-// An id is NOT part of the hash — it is compared separately.
+// placement: kind (both kinds line up since M2.5), runs (text +
+// style), and flow (keepLines/widowControl/bonds/forced breaks). An
+// id is NOT part of the hash — it is compared separately.
 function hashBlock(block: Block): string {
   return stableStringify({
     kind: block.kind,
@@ -485,30 +820,4 @@ function countFitting(results: readonly LineResult[], from: number, height: numb
     count++
   }
   return count
-}
-
-// M2.5 LOUD SEAMS: keepNext, keepPrevious, breakBefore, and breakAfter
-// have no implemented semantics. Genuinely set values throw —
-// unimplemented surface must be loud, never a silent no-op. null is
-// treated as UNSET: PM attribute JSON round-trips use null for absent
-// attrs, so a .tensor file with flow: { keepNext: null } must not
-// throw on load. For booleans the === true check already treats null
-// and false (the default semantics) as unset/harmless.
-function validateFlow(doc: SemanticDoc): void {
-  for (const block of doc.blocks) {
-    const flow = block.flow
-    if (!flow) continue
-    if (flow.keepNext === true) {
-      throw new Error('not yet implemented: flow.keepNext (M2.5)')
-    }
-    if (flow.keepPrevious === true) {
-      throw new Error('not yet implemented: flow.keepPrevious (M2.5)')
-    }
-    if ((flow.breakBefore ?? undefined) !== undefined) {
-      throw new Error('not yet implemented: flow.breakBefore (M2.5)')
-    }
-    if ((flow.breakAfter ?? undefined) !== undefined) {
-      throw new Error('not yet implemented: flow.breakAfter (M2.5)')
-    }
-  }
 }

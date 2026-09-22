@@ -65,7 +65,9 @@ export interface LineResult {
 
 /**
  * Per-block flow control. Field names deliberately mirror OOXML
- * (w:keepNext, w:keepLines, ...) for a future DOCX round-trip.
+ * (w:keepNext, w:keepLines, ...) for a future DOCX round-trip. null
+ * counts as UNSET at every use site — PM attribute JSON round-trips
+ * use null for absent attrs.
  */
 export interface FlowPolicy {
   /**
@@ -80,13 +82,22 @@ export interface FlowPolicy {
    * split (no boundary adjustments).
    */
   widowControl?: boolean
-  /** M2.5 — not yet implemented; a genuinely set value throws. */
+  /**
+   * M2.5 BOND (A→B): A's last line and B's first line share a page.
+   * Enforced at A's placement via a lookahead of B's first-line height;
+   * bounded shapes, give-up drops loudly.
+   */
   keepNext?: boolean
-  /** M2.5 — not yet implemented; a genuinely set value throws. */
+  /** M2.5 BOND: same bond as keepNext on the previous block — one mechanism, two spellings. */
   keepPrevious?: boolean
-  /** M2.5 — not yet implemented; a genuinely set value throws. */
+  /**
+   * Structural tier (precedence 1): force a page break before this
+   * block. A fresh-page start is a no-op. A bond at this boundary
+   * drops — a page that must start with B cannot also start with A's
+   * last fragment.
+   */
   breakBefore?: 'page' | null
-  /** M2.5 — not yet implemented; a genuinely set value throws. */
+  /** Structural tier (precedence 1): force a page break after this block. Emits no FragmentBreak. */
   breakAfter?: 'page' | null
 }
 

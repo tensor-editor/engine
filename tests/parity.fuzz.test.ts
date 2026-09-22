@@ -38,17 +38,35 @@ const BASE_OPTS: LayoutOptions = {
 const randInt = (rng: () => number, lo: number, hi: number) =>
   lo + Math.floor(rng() * (hi - lo + 1))
 
+// M2.5 flow menu: bonds (keepNext/keepPrevious), forced breaks
+// (breakBefore/breakAfter), keep-together, widow-off, or none.
+const FLOW_MENU: (FlowPolicy | undefined)[] = [
+  { keepLines: true },
+  { widowControl: false },
+  { keepNext: true },
+  { keepPrevious: true },
+  { breakBefore: 'page' },
+  { breakAfter: 'page' },
+  undefined,
+]
+
 function randomBlock(rng: () => number, id: string): Block {
   // 1-3 runs of random length; 0-token runs keep the empty-paragraph
-  // placeholder path exercised.
+  // placeholder path exercised. Occasional heading blocks exercise real
+  // heading layout (M2.5).
   const runs = Array.from({ length: randInt(rng, 1, 3) }, () => ({
     text: 'aaaa '.repeat(randInt(rng, 0, 8)),
     style: { fontFamily: 'sans-serif', fontSize: FONT_SIZES[randInt(rng, 0, 3)] },
   }))
-  const roll = rng()
-  const flow: FlowPolicy | undefined =
-    roll < 0.15 ? { keepLines: true } : roll < 0.25 ? { widowControl: false } : undefined
-  return { id, kind: 'paragraph', runs, ...(flow ? { flow } : {}) }
+  const kind = rng() < 0.2 ? 'heading' : 'paragraph'
+  const flow = FLOW_MENU[Math.floor(rng() * FLOW_MENU.length)]
+  return {
+    id,
+    kind,
+    ...(kind === 'heading' ? { level: randInt(rng, 1, 4) } : {}),
+    runs,
+    ...(flow ? { flow } : {}),
+  } as Block
 }
 
 interface FuzzState {
@@ -96,11 +114,9 @@ function applyOp(rng: () => number, state: FuzzState): { kind: OpKind; state: Fu
         // height-changing: entirely new random content, same id
         doc.blocks[at] = randomBlock(rng, target.id)
       } else {
-        // flow-changing
-        doc.blocks[at] = {
-          ...target,
-          flow: (rng() < 0.5 ? { keepLines: true } : { widowControl: false }) as FlowPolicy,
-        }
+        // flow-changing: set/clear a random flow policy — bonds and
+        // forced breaks included.
+        doc.blocks[at] = { ...target, flow: FLOW_MENU[Math.floor(rng() * FLOW_MENU.length)] }
       }
       break
     }

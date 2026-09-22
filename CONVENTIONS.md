@@ -14,6 +14,12 @@
   union — never hardcode one kind end-to-end.
 - Line boxes are POSITIONED facts in the output. Consumers never derive geometry.
 - Fragments of a block share its id; lineIndex is continuous across pages.
+- A bonded block's placement consumes its successor's first-line height
+  (upstream dependence). Resume points and splice endpoints extend
+  backward through bonds; a splice never ends on a bonded predecessor.
+- Flow precedence tiers: structural forced breaks > orphan/atomic
+  start-moves > bond > widow adjust — a bounded re-check loop over the
+  R6 floor.
 - PARITY LAW (M3): the engine instance may memoize; warm output must
   deep-equal cold output — verified by the parity fuzzer, forever. It
   supersedes M0's `previous?: LayoutResult` PERF HINT parameter (removed in

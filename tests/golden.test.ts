@@ -64,3 +64,39 @@ describe('golden: 10-line fontSize-100 block across two pages (FakeMetrics)', ()
     expect(round(result)).toMatchSnapshot()
   })
 })
+
+describe('golden: bonded heading flagship (FakeMetrics)', () => {
+  it('5/7/5: filler strands, keepNext heading moves fresh, paragraph splits', () => {
+    // Flagship: filler (5 lines), heading (2 lines, keepNext bonded to
+    // the paragraph), paragraph (10 lines) at fontSize 100 (110px
+    // lines, cap 7). WITHOUT the bond the heading strands at page 0's
+    // bottom; WITH it, the heading's start moves fresh to page 1, the
+    // paragraph's first 5 lines follow it, and its last 5 open page 2.
+    const doc: SemanticDoc = {
+      baseStyle: { fontFamily: 'sans-serif', fontSize: 16 },
+      blocks: [
+        {
+          id: 'filler',
+          kind: 'paragraph',
+          runs: [{ text: 'aaaa '.repeat(60), style: { fontFamily: 'sans-serif', fontSize: 100 } }],
+        },
+        {
+          id: 'heading',
+          kind: 'heading',
+          level: 1,
+          runs: [{ text: 'aaaa '.repeat(24), style: { fontFamily: 'sans-serif', fontSize: 100 } }],
+          flow: { keepNext: true },
+        },
+        {
+          id: 'para',
+          kind: 'paragraph',
+          runs: [{ text: 'aaaa '.repeat(120), style: { fontFamily: 'sans-serif', fontSize: 100 } }],
+        },
+      ],
+    }
+
+    const { layout } = createLayoutEngine({ metrics: FakeMetrics })
+    const result = layout(doc, opts)
+    expect(round(result)).toMatchSnapshot()
+  })
+})

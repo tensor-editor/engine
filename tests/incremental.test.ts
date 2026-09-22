@@ -188,4 +188,63 @@ describe('incremental layout (M3)', () => {
     expect(() => engine.layout(doc, opts)).toThrow(/duplicate block id: dup/)
     expect(() => cold(doc)).toThrow(/duplicate block id/)
   })
+
+  it('M2.5: an edit inside a bonded successor re-walks its predecessor (stats assert)', () => {
+    // W (keepNext) is bonded to S: W's cached placement consumed S's
+    // first-line height, so an edit inside S invalidates W's cached
+    // placement too — the resume point extends BACKWARD through the
+    // bond. All 7 lines fit one page, so geometry is unaffected; the
+    // test pins the cache mechanics.
+    const doc: SemanticDoc = {
+      baseStyle,
+      blocks: [
+        para('f', 'aaaa'),
+        para('w', 'aaaa '.repeat(24), style16, { keepNext: true }),
+        para('s', 'aaaa '.repeat(24), style16),
+        para('t', 'aaaa'),
+        para('u', 'aaaa'),
+        para('v', 'aaaa'),
+      ],
+    }
+    const engine = createLayoutEngine({ metrics: FakeMetrics })
+    engine.layout(doc, opts)
+
+    // Hash-only edit inside the bonded successor S.
+    doc.blocks[2] = para('s', 'bbbb '.repeat(24), style16)
+    const result = engine.layout(doc, opts)
+
+    const stats = engine.lastStats
+    console.log('bonded-edit lastStats:', stats)
+    expect(stats.blocksWalked).toBe(2) // W (predecessor re-walk) + S
+    expect(stats.linesRebroken).toBe(1) // only S missed lineCache
+    expect(stats.blocksSpliced).toBe(3) // T, U, V
+    expect(canonical(result)).toEqual(canonical(cold(doc)))
+  })
+
+  it('M2.5: splice still fires through unchanged bonded regions', () => {
+    const doc: SemanticDoc = {
+      baseStyle,
+      blocks: [
+        para('f', 'aaaa'),
+        para('w', 'aaaa '.repeat(24), style16, { keepNext: true }),
+        para('s', 'aaaa '.repeat(24), style16),
+        para('t', 'aaaa'),
+        para('u', 'aaaa'),
+        para('v', 'aaaa'),
+      ],
+    }
+    const engine = createLayoutEngine({ metrics: FakeMetrics })
+    engine.layout(doc, opts)
+
+    // Hash-only edit of F, BEFORE the bonded pair: the bonded region
+    // (W→S) is unchanged and its cached placements consumed consistent
+    // heights — the splice consumes it whole.
+    doc.blocks[0] = para('f', 'bbbb')
+    const result = engine.layout(doc, opts)
+
+    expect(engine.lastStats.blocksWalked).toBe(1)
+    expect(engine.lastStats.linesRebroken).toBe(1)
+    expect(engine.lastStats.blocksSpliced).toBe(5) // W, S (bonded pair), T, U, V
+    expect(canonical(result)).toEqual(canonical(cold(doc)))
+  })
 })
