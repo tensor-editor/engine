@@ -181,10 +181,50 @@ export interface FragmentBreak {
   pageIndex: number
 }
 
+/**
+ * Per-call cache statistics — DEBUG SURFACE, documented as such: not
+ * API-stable, never consulted by the engine itself.
+ */
+export interface LastStats {
+  /** Blocks placed through the walk machine this call (lineCache hits count). */
+  blocksWalked: number
+  /** breakLines() invocations this call (lineCache misses). */
+  linesRebroken: number
+  /** Cached walk entries consumed by verified splice this call. */
+  blocksSpliced: number
+  /**
+   * Current cache epoch. Persists across calls; resets to 0 in a fresh
+   * engine; increments on wholesale (opts/baseStyle) invalidation.
+   */
+  cacheEpoch: number
+  /** True when an opts/baseStyle change dropped the caches this call. */
+  invalidated: boolean
+}
+
+/**
+ * Treat as immutable. The engine shares cached LineBox/FragmentBreak
+ * objects across results (zero-copy); callers mutating them corrupt
+ * the cache AND parity. Emitted records are Object.freeze'd.
+ */
 export interface LayoutResult {
   pages: PageGeometry[]
   /** Document order. */
   lines: LineBox[]
   breaks: FragmentBreak[]
+  /**
+   * Cheap staleness signal, NOT a guarantee of change. Bumps ONLY when
+   * a call performed any re-break/re-walk; a fully-cache-served call
+   * keeps version.
+   */
   version: number
+}
+
+export interface LayoutEngine {
+  layout(doc: SemanticDoc, opts: LayoutOptions): LayoutResult
+  /**
+   * Debug surface: stats of the LAST layout() call. Rebuilt from
+   * scratch every call — never accumulated (a stale counter would
+   * make the scripted counts lie). Not API-stable.
+   */
+  readonly lastStats: LastStats
 }
