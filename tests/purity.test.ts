@@ -25,12 +25,21 @@ const REACT_IMPORT =
   /(?:import|from|require\s*\()\s*[^;'"`\n]*['"]react(?:-dom)?(?:\/[^'"]*)?['"]/
 
 describe('src/ purity', () => {
-  it('never references document./window. nor imports react', () => {
+  it('never references DOM/canvas APIs nor imports react', () => {
     const violations: string[] = []
     for (const file of tsFilesUnder(srcDir)) {
       const code = stripComments(readFileSync(file, 'utf8'))
-      if (code.includes('document.') || code.includes('window.')) {
-        violations.push(`${file}: references document. or window.`)
+      // Banned: any way src/ could reach a ruler of its own. Measurement
+      // is injected via the TextMetrics port; the engine consumes it,
+      // never performs it.
+      if (
+        code.includes('document.') ||
+        code.includes('window.') ||
+        code.includes('OffscreenCanvas') ||
+        code.includes('HTMLCanvasElement') ||
+        code.includes('createElement')
+      ) {
+        violations.push(`${file}: references DOM/canvas APIs`)
       }
       if (REACT_IMPORT.test(code)) {
         violations.push(`${file}: imports react or react-dom`)

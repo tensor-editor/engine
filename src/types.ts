@@ -20,6 +20,49 @@ export interface Run {
   style: TextStyle
 }
 
+/**
+ * Port only. The real (canvas-based) implementation lives in the shell
+ * repo, never here. The engine consumes measurement; it does not perform
+ * it. No caching in the engine — memoization is the production metrics
+ * implementation's job.
+ */
+export interface TextMetrics {
+  /** Advance width of `text` under `style`, in px. */
+  measure(text: string, style: TextStyle): number
+  ascent(style: TextStyle): number
+  descent(style: TextStyle): number
+}
+
+export interface LineSegment {
+  /** Index into the paragraph's runs array. */
+  runIndex: number
+  /**
+   * Offsets into the concatenated run text, clamped to the line's range.
+   * Edit survival: plain character offsets, same contract as LineResult
+   * start/end — edits before an offset shift it.
+   */
+  start: number
+  end: number
+}
+
+export interface LineResult {
+  /**
+   * Offsets into the concatenated run text (runs joined in array order).
+   * Edit survival: plain character offsets — edits before an offset shift
+   * it; they name source positions, not re-flowed fragments.
+   */
+  start: number
+  end: number
+  /** Run boundaries survive breaking. */
+  segments: LineSegment[]
+  /** Measured. */
+  width: number
+  /** Max ascent + max descent over runs in the line. */
+  height: number
+  /** Max ascent over runs in the line. */
+  baseline: number
+}
+
 export interface BlockBase {
   id: string
   kind: 'paragraph' | 'heading'
@@ -75,6 +118,12 @@ export interface LineBox {
    */
   rangeStart: number
   rangeEnd: number
+  /**
+   * Copied from the line's LineResult — consumers never derive run
+   * boundaries. Edit survival: plain character offsets into the
+   * concatenated run text, same contract as rangeStart/rangeEnd.
+   */
+  segments: LineSegment[]
 }
 
 export interface FragmentBreak {
