@@ -80,4 +80,33 @@ describe('breakLines (M1 greedy breaker)', () => {
       [10, 15],
     ])
   })
+
+  it('lineHeight 2.0 doubles height and shifts the baseline by the half-leading', () => {
+    // a = 13.6, d = 4, content = 17.6 → height = 35.2;
+    // baseline = 13.6 + (35.2 − 17.6) / 2 = 13.6 + 8.8 = 22.4.
+    const tall: TextStyle = { fontFamily: 'sans-serif', fontSize: 16, lineHeight: 2.0 }
+    const lines = breakLines([run('hi', tall)], FakeMetrics, maxWidth, baseStyle)
+    expect(lines[0].height).toBeCloseTo(35.2)
+    expect(lines[0].baseline).toBeCloseTo(22.4)
+  })
+
+  it('lineHeight absent or 1.0 is bit-identical to the lineHeight-free model', () => {
+    const plain = run('hi')
+    const one = run('hi', { fontFamily: 'sans-serif', fontSize: 16, lineHeight: 1.0 })
+    const a = breakLines([plain], FakeMetrics, maxWidth, baseStyle)
+    const b = breakLines([one], FakeMetrics, maxWidth, baseStyle)
+    // toBe, not toBeCloseTo: the invariant is bit-exact equality.
+    expect(b[0].height).toBe(a[0].height)
+    expect(b[0].baseline).toBe(a[0].baseline)
+    // ...and both equal today's known numbers.
+    expect(a[0].height).toBeCloseTo(17.6)
+    expect(a[0].baseline).toBeCloseTo(13.6)
+  })
+
+  it('lineHeight applies to the empty-line baseStyle fallback too', () => {
+    const tallBase: TextStyle = { fontFamily: 'sans-serif', fontSize: 16, lineHeight: 2.0 }
+    const lines = breakLines([], FakeMetrics, maxWidth, tallBase)
+    expect(lines[0].height).toBeCloseTo(35.2)
+    expect(lines[0].baseline).toBeCloseTo(22.4)
+  })
 })

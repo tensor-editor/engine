@@ -13,6 +13,15 @@ export interface TextStyle {
   fontSize: number
   bold?: boolean
   italic?: boolean
+  /**
+   * Line-height multiplier, default 1.0. Half-leading model
+   * (CSS-style): a run's line box height = (ascent + descent) ×
+   * lineHeight, with the baseline pushed down by half the added
+   * leading: baseline = ascent + (height − (ascent + descent)) / 2.
+   * INVARIANT: absent or 1.0 produces numbers IDENTICAL to
+   * lineHeight-free layout — pinned bit-for-bit by tests.
+   */
+  lineHeight?: number
 }
 
 export interface Run {

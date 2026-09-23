@@ -164,6 +164,17 @@ interface WalkCacheEntry {
   lineBoxes: LineBox[]
   breaks: FragmentBreak[]
   exitState: WalkState
+  /**
+   * UPSTREAM-DEPENDENCE RECORD: whether this placement consumed its
+   * successor's first-line height (an ACTIVE bond lookahead at cache
+   * time). Both directions matter: a successor edit invalidates a
+   * consuming placement even when the current doc no longer carries
+   * the bond (keepPrevious REMOVED), and a newly-added bond requires
+   * consumption the cached placement never performed. Backward-resume
+   * and the splice pull-back test BOTH the current flags and this
+   * cached record.
+   */
+  bonded: boolean
 }
 
 // Line-level cache: a block's LineResults depend only on (runs,
@@ -262,12 +273,15 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
       // predecessor's placement consumed its successor's first-line
       // height (the bond lookahead), so an edit inside the successor
       // can invalidate the predecessor's cached placement — extend the
-      // resume point BACKWARD while blocks[resume-1] bonds to
-      // blocks[resume]. Flag-level (conservative: a structurally
-      // dropped bond still extends — a spurious extension only
-      // re-walks, never mis-splices). blocksWalked counts the re-walked
-      // bonded predecessors.
-      while (resume > 0 && bondExistsBetween(doc, resume - 1)) {
+      // resume point BACKWARD while the pair is bonded. BOTH signals
+      // are tested: the CURRENT doc's bond flags (a newly-added bond
+      // requires consumption the cached placement never performed) AND
+      // the cached bonded record (a consuming placement is stale even
+      // when the edit REMOVED the bond — e.g. keepPrevious deleted from
+      // the successor; a fuzzer-caught hole). Conservative: a spurious
+      // extension only re-walks, never mis-splices. blocksWalked counts
+      // the re-walked bonded predecessors.
+      while (resume > 0 && (bondExistsBetween(doc, resume - 1) || oldCache[resume - 1].bonded)) {
         resume -= 1
       }
 
@@ -419,6 +433,7 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
           lineBoxes: placed.lineBoxes,
           breaks: placed.breaks,
           exitState: placed.exitState,
+          bonded,
         })
         if (!walked.has(i)) {
           walked.add(i)
@@ -487,6 +502,7 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
                   lineBoxes: prevPlaced.lineBoxes,
                   breaks: prevPlaced.breaks,
                   exitState: prevPlaced.exitState,
+                  bonded: true, // this re-placement consumed block i's height
                 })
                 state = prevPlaced.exitState
                 continue // the loop re-places block i from the new state
@@ -534,11 +550,18 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
         // The splice may not END on a bonded predecessor: its cached
         // placement consumed its successor's first-line height (the
         // bond lookahead), and the successor was NOT spliced — it
-        // changed (or ended the run), so that context is stale. Un-
-        // consume trailing bonded entries; the walk re-places them
-        // with a fresh lookahead. Symmetric with the backward-resume
-        // rule at the prefix boundary.
-        while (j - 1 > i && bondExistsBetween(doc, j - 1)) {
+        // changed (or ended the run), so that context is stale. BOTH
+        // signals tested: the cached bonded record (stale consumption
+        // even if the edit removed the bond) AND the current bond
+        // flags (a newly-added bond requires enforcement the cached
+        // placement never performed). Un-consume trailing bonded
+        // entries; the walk re-places them with a fresh lookahead.
+        // Symmetric with the backward-resume rule at the prefix
+        // boundary.
+        while (
+          j - 1 > i &&
+          (bondExistsBetween(doc, j - 1) || oldCache[j - 1].bonded)
+        ) {
           const popped = newCache.pop()!
           lines.length -= popped.lineBoxes.length
           breaks.length -= popped.breaks.length

@@ -29,6 +29,7 @@ function mulberry32(seed: number): () => number {
 }
 
 const FONT_SIZES = [16, 24, 32, 100] // mixed heights: 17.6 / 26.4 / 35.2 / 110
+const LINE_HEIGHTS = [1.0, 1.5, 2.0] // half-leading model (E1)
 const BASE_STYLE: TextStyle = { fontFamily: 'sans-serif', fontSize: 16 }
 const BASE_OPTS: LayoutOptions = {
   page: { width: 816, height: 1056 },
@@ -56,7 +57,13 @@ function randomBlock(rng: () => number, id: string): Block {
   // heading layout (M2.5).
   const runs = Array.from({ length: randInt(rng, 1, 3) }, () => ({
     text: 'aaaa '.repeat(randInt(rng, 0, 8)),
-    style: { fontFamily: 'sans-serif', fontSize: FONT_SIZES[randInt(rng, 0, 3)] },
+    style: {
+      fontFamily: 'sans-serif',
+      fontSize: FONT_SIZES[randInt(rng, 0, 3)],
+      ...(rng() < 0.5
+        ? { lineHeight: LINE_HEIGHTS[randInt(rng, 0, 2)] }
+        : {}),
+    },
   }))
   const kind = rng() < 0.2 ? 'heading' : 'paragraph'
   const flow = FLOW_MENU[Math.floor(rng() * FLOW_MENU.length)]

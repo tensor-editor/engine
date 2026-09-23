@@ -6,6 +6,19 @@ import type { LineResult, LineSegment, Run, TextMetrics, TextStyle } from './typ
 // TODO(M3+): proper UAX #14 line breaking, whitespace collapsing,
 // hyphenation, overflow policy.
 
+// Half-leading (CSS-style) for one box: with content height c = a + d
+// and lineHeight multiplier lh, the line box is c × lh tall and the
+// baseline sits at a + (c × lh − c) / 2. lineHeight absent or 1.0
+// returns (c, a) bit-identically to the lineHeight-free model.
+function halfLeading(ascent: number, descent: number, style: TextStyle): {
+  height: number
+  baseline: number
+} {
+  const content = ascent + descent
+  const height = content * (style.lineHeight ?? 1.0)
+  return { height, baseline: ascent + (height - content) / 2 }
+}
+
 export function breakLines(
   runs: readonly Run[],
   metrics: TextMetrics,
@@ -19,16 +32,18 @@ export function breakLines(
     // A line with no runs has no style of its own to measure, so its
     // height/baseline fall back to the document baseStyle (REQUIRED,
     // supplied by the adapter — defaults live at the edges, never in
-    // the engine). Fulfilled by M2 baseStyle. Width stays 0 (no glyphs).
+    // the engine). Fulfilled by M2 baseStyle. Width stays 0 (no
+    // glyphs). Half-leading model applies to baseStyle.lineHeight.
     const ascent = metrics.ascent(baseStyle)
     const descent = metrics.descent(baseStyle)
+    const { height, baseline } = halfLeading(ascent, descent, baseStyle)
     return [{
       start: 0,
       end: 0,
       segments: [],
       width: 0,
-      height: ascent + descent,
-      baseline: ascent,
+      height,
+      baseline,
     }]
   }
 
@@ -65,18 +80,30 @@ export function breakLines(
     return segments
   }
 
-  // Vertical metrics over the runs a line actually contains: max ascent
-  // and max descent taken independently.
+  // HALF-LEADING MODEL (CSS-style), per run: leading L =
+  // (a + d) × lineHeight − (a + d); the half-leading extends the box
+  // equally above and below the glyphs:
+  //   boxAscent = a + L/2, boxDescent = d + L/2
+  // A line's height/baseline are the max extents over its runs. For a
+  // single run this reduces exactly to the spec formula:
+  //   height = (a + d) × lineHeight
+  //   baseline = ascent + (height − (a + d)) / 2
+  // INVARIANT: lineHeight absent or 1.0 gives L == 0, so boxAscent == a
+  // and boxDescent == d bit-identically — numbers match the
+  // lineHeight-free model exactly (pinned by tests).
   function verticalFor(start: number, end: number): { height: number; baseline: number } {
-    let ascent = 0
-    let descent = 0
+    let boxAscent = 0
+    let boxDescent = 0
     for (const { run, start: rs, end: re } of runRanges) {
       if (Math.max(start, rs) < Math.min(end, re)) {
-        ascent = Math.max(ascent, metrics.ascent(run.style))
-        descent = Math.max(descent, metrics.descent(run.style))
+        const a = metrics.ascent(run.style)
+        const d = metrics.descent(run.style)
+        const leading = (a + d) * (run.style.lineHeight ?? 1.0) - (a + d)
+        boxAscent = Math.max(boxAscent, a + leading / 2)
+        boxDescent = Math.max(boxDescent, d + leading / 2)
       }
     }
-    return { height: ascent + descent, baseline: ascent }
+    return { height: boxAscent + boxDescent, baseline: boxAscent }
   }
 
   function makeLine(start: number, end: number): LineResult {
