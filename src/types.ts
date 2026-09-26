@@ -14,11 +14,15 @@ export interface TextStyle {
   bold?: boolean
   italic?: boolean
   /**
-   * Line-height multiplier, default 1.0. Half-leading model
-   * (CSS-style): a run's line box height = (ascent + descent) ×
-   * lineHeight, with the baseline pushed down by half the added
-   * leading: baseline = ascent + (height − (ascent + descent)) / 2.
-   * INVARIANT: absent or 1.0 produces numbers IDENTICAL to
+   * Line-height multiplier, default 1.0. BOTTOM-ONLY LEADING (M6
+   * ruling — spec of record): a line box's height = (ascent +
+   * descent) × lineHeight and the baseline sits at `ascent` from the
+   * box top; ALL the added leading lives BELOW the glyphs.
+   * Rationale: the top-left of a line box is always text — inter-line
+   * space lives below, and above-line space belongs to the block
+   * tier (spaceBefore/spaceAfter), never to the line. Word-family
+   * convention, deliberately chosen over CSS half-leading.
+   * INVARIANT: absent or 1.0 produces numbers IDENTICAL to the
    * lineHeight-free layout — pinned bit-for-bit by tests.
    */
   lineHeight?: number
@@ -114,6 +118,17 @@ export interface BlockBase {
   id: string
   kind: 'paragraph' | 'heading'
   flow?: FlowPolicy
+  /**
+   * Vertical space (px) above the block's first line. Applied ONCE at
+   * block entry: fragment continuations (a mid-block page split) never
+   * re-apply it. Consumed before the fit walk, so fits/orphan/widow
+   * evaluate against the line tops; the y>0 loop-freedom guards test
+   * the PRE-spaceBefore cursor (spaceBefore is not "content" — a page
+   * holding only spaceBefore is still fresh).
+   */
+  spaceBefore?: number
+  /** Vertical space (px) after the block's last line. Participates in the NEXT block's fits. */
+  spaceAfter?: number
 }
 
 export interface ParagraphBlock extends BlockBase {

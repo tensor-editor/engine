@@ -6,17 +6,23 @@ import type { LineResult, LineSegment, Run, TextMetrics, TextStyle } from './typ
 // TODO: proper UAX #14 line breaking, whitespace collapsing,
 // hyphenation, overflow policy.
 
-// Half-leading (CSS-style) for one box: with content height c = a + d
-// and lineHeight multiplier lh, the line box is c × lh tall and the
-// baseline sits at a + (c × lh − c) / 2. lineHeight absent or 1.0
-// returns (c, a) bit-identically to the lineHeight-free model.
-function halfLeading(ascent: number, descent: number, style: TextStyle): {
+// BOTTOM-ONLY LEADING (M6 RULING — spec of record): with content
+// height c = a + d and lineHeight multiplier lh, the line box is
+// c × lh tall and the baseline sits at `ascent` from the box top —
+// ALL the leading (c × lh − c) lives BELOW the glyphs.
+// Rationale: the top-left of a line box is always text; inter-line
+// space lives below; above-line space is owned by the block tier
+// (spaceBefore/spaceAfter), never by the line. Word-family
+// convention, deliberately replacing the CSS half-leading model.
+// lineHeight absent or 1.0 returns (c, a) bit-identically to the
+// lineHeight-free model.
+function lineBoxVertical(ascent: number, descent: number, style: TextStyle): {
   height: number
   baseline: number
 } {
   const content = ascent + descent
   const height = content * (style.lineHeight ?? 1.0)
-  return { height, baseline: ascent + (height - content) / 2 }
+  return { height, baseline: ascent }
 }
 
 export function breakLines(
@@ -32,11 +38,11 @@ export function breakLines(
     // A line with no runs has no style of its own to measure, so its
     // height/baseline fall back to the document baseStyle (REQUIRED,
     // supplied by the adapter — defaults live at the edges, never in
-    // the engine). Width stays 0 (no glyphs). Half-leading model
-    // applies to baseStyle.lineHeight.
+    // the engine). Width stays 0 (no glyphs). The bottom-only leading
+    // model applies to baseStyle.lineHeight.
     const ascent = metrics.ascent(baseStyle)
     const descent = metrics.descent(baseStyle)
-    const { height, baseline } = halfLeading(ascent, descent, baseStyle)
+    const { height, baseline } = lineBoxVertical(ascent, descent, baseStyle)
     return [{
       start: 0,
       end: 0,
@@ -80,14 +86,14 @@ export function breakLines(
     return segments
   }
 
-  // HALF-LEADING MODEL (CSS-style), per run: leading L =
-  // (a + d) × lineHeight − (a + d); the half-leading extends the box
-  // equally above and below the glyphs:
-  //   boxAscent = a + L/2, boxDescent = d + L/2
+  // BOTTOM-LEADING MODEL (M6 ruling), per run: leading L =
+  // (a + d) × lineHeight − (a + d); the whole leading extends the box
+  // BELOW the glyphs:
+  //   boxAscent = a, boxDescent = d + L
   // A line's height/baseline are the max extents over its runs. For a
-  // single run this reduces exactly to the spec formula:
+  // single run this reduces exactly to the ruling:
   //   height = (a + d) × lineHeight
-  //   baseline = ascent + (height − (a + d)) / 2
+  //   baseline = ascent
   // INVARIANT: lineHeight absent or 1.0 gives L == 0, so boxAscent == a
   // and boxDescent == d bit-identically — numbers match the
   // lineHeight-free model exactly (pinned by tests).
@@ -99,8 +105,8 @@ export function breakLines(
         const a = metrics.ascent(run.style)
         const d = metrics.descent(run.style)
         const leading = (a + d) * (run.style.lineHeight ?? 1.0) - (a + d)
-        boxAscent = Math.max(boxAscent, a + leading / 2)
-        boxDescent = Math.max(boxDescent, d + leading / 2)
+        boxAscent = Math.max(boxAscent, a)
+        boxDescent = Math.max(boxDescent, d + leading)
       }
     }
     return { height: boxAscent + boxDescent, baseline: boxAscent }

@@ -18,6 +18,14 @@ import { breakLines } from './line-breaker.js'
 // - "Orphan" = a block's first line alone at the bottom of a page.
 // - "Widow"  = a block's last line alone at the top of the next page.
 //
+// BLOCK-TIER SPACING (spaceBefore/spaceAfter): spaceBefore is
+// applied ONCE at block entry — fit counts evaluate against the line
+// tops, and the y > 0 loop-freedom guards test line-top presence
+// (spaceBefore is not content). spaceAfter joins the block's EXIT
+// cursor, so the next block's fits account for it. Fragment
+// continuations never re-apply spaceBefore: it was consumed at entry,
+// and closePage resets the cursor to a bare page top.
+//
 // Placement rules, evaluated per attempt on page p (cursor y, H =
 // remaining height) for a block of L lines with k already placed
 // (n = L - k remaining). `fits` is ALWAYS computed by walking the
@@ -29,17 +37,20 @@ import { breakLines } from './line-breaker.js'
 //
 //   R0. Whole remainder fits H → place, done.
 //   R1. fits == 0 → close page, re-enter fresh. Fires only when the
-//       page has content (y > 0): closing a fresh page is a vacuous
-//       move (R6 territory instead).
-//   R2. ORPHAN: fits == 1 && n > 1 && widowControl (and y > 0) → the
+//       page holds line tops (hasContent): closing a fresh page is a
+//       vacuous move (R6 territory instead). spaceBefore pads the
+//       cursor but is NOT content — a page holding only spaceBefore
+//       is still fresh.
+//   R2. ORPHAN: fits == 1 && n > 1 && widowControl (and hasContent) → the
 //       block's START moves to the next page (R1-style). Applies to
 //       tall blocks too: only the START moves; after re-entry it
 //       fragments naturally under R4. Never leaves a lone first line
 //       at a page bottom. The y > 0 guard is loop-freedom: moving off
 //       a fresh page re-creates the same situation forever.
-//   R-ATOMIC. k == 0 && flow.keepLines && n <= cap → move the whole
-//       block to the next page (R1-style). Tall blocks fall through to
-//       R4 — can't keep together what can't fit together.
+//   R-ATOMIC. k == 0 && flow.keepLines && n <= cap && hasContent →
+//       move the whole block to the next page (R1-style). Tall blocks
+//       fall through to R4 — can't keep together what can't fit
+//       together.
 //   R3. WIDOW: n - fits == 1 && fits > 1 && widowControl → break at
 //       fits - 1; re-check R2 (inheriting its y > 0 guard). Applies to
 //       tall blocks at their end edge. Under uniform line heights this
@@ -615,15 +626,19 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
 // EXACTLY. The prediction must mirror "the same rules the walk
 // applies" completely, or it isn't exact; every arm is listed:
 //   - structural breakBefore: y > 0 → the page closes → next page.
+//   - spaceBefore is consumed at entry, shrinking the fit budget;
+//     the y > 0 guards below test line-top presence (entry.y), not
+//     the padded cursor — spaceBefore is not content.
 //   - R0: the whole block fits → stays.
-//   - fits == 0: y > 0 → R1 closes → next page; y == 0 → R6 places
-//     the first line by fiat on the entry page → STAYS (degenerate: a
+//   - fits == 0: content on the page → R1 closes → next page; fresh
+//     page → R6 places the first line by fiat → STAYS (degenerate: a
 //     single line taller than the page still lands on the entry page —
 //     the bond HOLDS).
-//   - R2 orphan: fits == 1 && n > 1 && control && y > 0 → next page.
+//   - R2 orphan: fits == 1 && n > 1 && control && hasContent → next page.
 //   - R-ATOMIC: keepLines && n <= cap while the block doesn't fit →
-//     next page (cannot fire at y == 0: n <= cap means a fresh page
-//     fits the whole block, so R0 already fired).
+//     next page (cannot fire on a fresh page: n <= cap means the
+//     unpadded fresh page fits the whole block, so R0 already fired —
+//     with spaceBefore the hasContent guard pins it).
 //   - otherwise: R3-adjusted/R5 splits place fits >= 1 FIRST lines on
 //     the entry page → stays (R3 never moves the start).
 function firstLineLands(
@@ -634,13 +649,14 @@ function firstLineLands(
   control: boolean,
 ): boolean {
   if (block.flow?.breakBefore === 'page' && entry.y > 0) return false
+  const hasContent = entry.y > 0
   const n = lines.length
-  const fits = countFitting(lines, 0, contentHeight - entry.y)
+  const fits = countFitting(lines, 0, contentHeight - entry.y - (block.spaceBefore ?? 0))
   if (fits >= n) return true
-  if (fits === 0) return entry.y === 0
-  if (fits === 1 && n > 1 && control && entry.y > 0) return false
+  if (fits === 0) return !hasContent
+  if (fits === 1 && n > 1 && control && hasContent) return false
   const cap = countFitting(lines, 0, contentHeight)
-  if (block.flow?.keepLines === true && n <= cap) return false
+  if (block.flow?.keepLines === true && n <= cap && hasContent) return false
   return true
 }
 
@@ -689,6 +705,18 @@ function placeBlock(
   const breaks: FragmentBreak[] = []
   let { pageIndex, y } = entryState
 
+  // SPACE-BEFORE (block entry, applied ONCE): the first line's top
+  // is pushed down by spaceBefore, so every fit count below evaluates
+  // against the line tops. The y > 0 loop-freedom guards test
+  // `hasContent` — whether the page already holds LINE tops — NOT the
+  // spaceBefore-padded cursor: spaceBefore is not content, and a page
+  // holding only spaceBefore is still fresh (closing it would violate
+  // the never-empty-page invariant). A page close mid-machine (R1/R2/
+  // R-ATOMIC/fragment) never re-applies spaceBefore: it was consumed
+  // here, and closePage resets the cursor to a bare page top.
+  let hasContent = entryState.y > 0
+  y += block.spaceBefore ?? 0
+
   const place = (from: number, count: number): void => {
     for (let i = from; i < from + count; i++) {
       const result = results[i]
@@ -705,12 +733,14 @@ function placeBlock(
         }),
       )
       y += result.height
+      hasContent = true
     }
   }
 
   const closePage = (): void => {
     pageIndex += 1
     y = 0
+    hasContent = false
   }
 
   let k = 0
@@ -734,27 +764,27 @@ function placeBlock(
     }
 
     if (fits === 0) {
-      if (y > 0) {
+      if (hasContent) {
         closePage() // R1
         continue
       }
       fits = 1 // R6: a fresh page always places one line
     }
 
-    if (control && y > 0 && fits === 1 && n > 1) {
+    if (control && hasContent && fits === 1 && n > 1) {
       closePage() // R2 orphan: the block's start moves
       continue
     }
 
-    if (k === 0 && block.flow?.keepLines === true && n <= cap) {
+    if (k === 0 && hasContent && block.flow?.keepLines === true && n <= cap) {
       closePage() // R-ATOMIC: keepLines moves the whole block
       continue
     }
 
     if (control && !bonded && n - fits === 1 && fits > 1) {
       fits -= 1 // R3 widow (bond preempts when ACTIVE)
-      if (fits === 1 && y > 0 && n > 1) {
-        closePage() // re-check R2 (inherits its y > 0 guard)
+      if (fits === 1 && hasContent && n > 1) {
+        closePage() // re-check R2 (inherits its content guard)
         continue
       }
     }
@@ -768,6 +798,11 @@ function placeBlock(
       closePage()
     }
   }
+
+  // SPACE-AFTER: belongs to this block's exit cursor, so the NEXT
+  // block's fits account for it (participates in fits). Never closes
+  // a page itself — only a line placement ever closes pages.
+  y += block.spaceAfter ?? 0
 
   return { lineBoxes, breaks, exitState: { pageIndex, y } }
 }
@@ -787,7 +822,9 @@ function sameState(a: WalkState, b: WalkState): boolean {
 
 // contentHash covers everything that determines a block's lines and
 // placement: kind (both kinds produce lines), runs (text +
-// style), and flow (keepLines/widowControl/bonds/forced breaks). An
+// style), flow (keepLines/widowControl/bonds/forced breaks), and the
+// block-tier spacing (spaceBefore/spaceAfter — undefined-valued keys
+// are dropped by stableStringify, so absent ≡ unset bit-for-bit). An
 // id is NOT part of the hash — it is compared separately.
 //
 // IDENTITY CACHE: hashes are memoized on the block
@@ -808,6 +845,8 @@ function hashBlock(block: Block): string {
       kind: block.kind,
       runs: block.runs.map((run) => ({ text: run.text, style: run.style })),
       flow: block.flow,
+      spaceBefore: block.spaceBefore,
+      spaceAfter: block.spaceAfter,
     })
     blockHashCache.set(block, hash)
     hashCallCount += 1

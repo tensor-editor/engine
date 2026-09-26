@@ -29,7 +29,10 @@ function mulberry32(seed: number): () => number {
 }
 
 const FONT_SIZES = [16, 24, 32, 100] // mixed heights: 17.6 / 26.4 / 35.2 / 110
-const LINE_HEIGHTS = [1.0, 1.5, 2.0] // half-leading model
+const LINE_HEIGHTS = [1.0, 1.5, 2.0] // bottom-only leading model
+// Block-tier spacing: occasional values exercise the entry/exit cursor
+// padding (fits against line tops, spaceAfter in the exit state).
+const SPACING = [20, 110, 300]
 const BASE_STYLE: TextStyle = { fontFamily: 'sans-serif', fontSize: 16 }
 const BASE_OPTS: LayoutOptions = {
   page: { width: 816, height: 1056 },
@@ -73,6 +76,8 @@ function randomBlock(rng: () => number, id: string): Block {
     ...(kind === 'heading' ? { level: randInt(rng, 1, 4) } : {}),
     runs,
     ...(flow ? { flow } : {}),
+    ...(rng() < 0.3 ? { spaceBefore: SPACING[randInt(rng, 0, 2)] } : {}),
+    ...(rng() < 0.3 ? { spaceAfter: SPACING[randInt(rng, 0, 2)] } : {}),
   } as Block
 }
 

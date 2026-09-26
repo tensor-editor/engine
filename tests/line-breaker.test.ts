@@ -81,13 +81,16 @@ describe('breakLines (greedy breaker)', () => {
     ])
   })
 
-  it('lineHeight 2.0 doubles height and shifts the baseline by the half-leading', () => {
-    // a = 13.6, d = 4, content = 17.6 → height = 35.2;
-    // baseline = 13.6 + (35.2 − 17.6) / 2 = 13.6 + 8.8 = 22.4.
+  it('lineHeight 2.0 doubles height; baseline stays at ascent — all leading below (M6 ruling)', () => {
+    // SPEC-OF-RECORD CHANGE (M6): bottom-only leading replaces CSS
+    // half-leading. a = 13.6, d = 4, content = 17.6 → height = 35.2;
+    // baseline = ascent = 13.6 (the whole 17.6−(35.2−17.6)=17.6 extra
+    // lives BELOW the glyphs). Rationale: a line box's top-left is
+    // always text; above-line space belongs to spaceBefore/After.
     const tall: TextStyle = { fontFamily: 'sans-serif', fontSize: 16, lineHeight: 2.0 }
     const lines = breakLines([run('hi', tall)], FakeMetrics, maxWidth, baseStyle)
     expect(lines[0].height).toBeCloseTo(35.2)
-    expect(lines[0].baseline).toBeCloseTo(22.4)
+    expect(lines[0].baseline).toBeCloseTo(13.6)
   })
 
   it('lineHeight absent or 1.0 is bit-identical to the lineHeight-free model', () => {
@@ -103,10 +106,10 @@ describe('breakLines (greedy breaker)', () => {
     expect(a[0].baseline).toBeCloseTo(13.6)
   })
 
-  it('lineHeight applies to the empty-line baseStyle fallback too', () => {
+  it('lineHeight applies to the empty-line baseStyle fallback too (bottom-only)', () => {
     const tallBase: TextStyle = { fontFamily: 'sans-serif', fontSize: 16, lineHeight: 2.0 }
     const lines = breakLines([], FakeMetrics, maxWidth, tallBase)
     expect(lines[0].height).toBeCloseTo(35.2)
-    expect(lines[0].baseline).toBeCloseTo(22.4)
+    expect(lines[0].baseline).toBeCloseTo(13.6)
   })
 })
