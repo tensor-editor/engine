@@ -2,7 +2,6 @@ import type {
   Block,
   FragmentBreak,
   LayoutEngine,
-  LayoutOptions,
   LastStats,
   LineBox,
   LineResult,
@@ -13,13 +12,13 @@ import type {
 } from './types.js'
 import { breakLines } from './line-breaker.js'
 
-// M2 SLICER VOCABULARY:
+// SLICER VOCABULARY:
 // - A block FRAGMENTS when a page break lands inside it (between its
 //   lines).
 // - "Orphan" = a block's first line alone at the bottom of a page.
 // - "Widow"  = a block's last line alone at the top of the next page.
 //
-// M2 placement rules, evaluated per attempt on page p (cursor y, H =
+// Placement rules, evaluated per attempt on page p (cursor y, H =
 // remaining height) for a block of L lines with k already placed
 // (n = L - k remaining). `fits` is ALWAYS computed by walking the
 // block's ACTUAL line heights — mixed font sizes mean mixed line
@@ -62,7 +61,7 @@ import { breakLines } from './line-breaker.js'
 // determinism outrank a minimum that cannot be honored; the y > 0
 // guard makes moving vacuous.
 //
-// M3 INCREMENTAL WALK — PARITY LAW: the engine instance may memoize;
+// INCREMENTAL WALK — PARITY LAW: the engine instance may memoize;
 // warm output must deep-equal cold output — verified by
 // tests/parity.fuzz.test.ts, forever. Same answers, provably; less
 // work, measurably (engine.lastStats).
@@ -78,8 +77,8 @@ import { breakLines } from './line-breaker.js'
 //    mid-splice mismatch aborts the splice and keeps walking (and
 //    re-attempting) — that is how reconvergence splices happen.
 //  - The caches live INSIDE the engine instance, NOT in LayoutResult.
-//    M4 CONSEQUENCE: the shell must hold ONE stable engine instance;
-//    new metrics requires a new engine.
+//    CONSEQUENCE FOR CONSUMERS: the shell must hold ONE stable
+//    engine instance; new metrics requires a new engine.
 //  - Stats hygiene: lastStats is rebuilt from scratch on every call —
 //    never accumulated (a stale counter would make the scripted
 //    counts lie). cacheEpoch persists across calls but resets to 0 in
@@ -88,9 +87,9 @@ import { breakLines } from './line-breaker.js'
 //    records are Object.freeze'd at creation — zero-copy sharing with
 //    copying's safety at none of the cost.
 //
-// M2.5 FLOW POLICY — the last loud seams close. Word-exact boundary
+// FLOW POLICY: Word-exact boundary
 // bonds, forced page breaks, real heading layout (headings route
-// through breakLines exactly like paragraphs; TODO(M4): level-based
+// through breakLines exactly like paragraphs; TODO(adapter): level-based
 // default styles arrive from the ADAPTER — level is not a layout
 // input here).
 //
@@ -187,8 +186,8 @@ interface CachedLines {
 
 /**
  * Creates a layout engine bound to the given metrics port. The cache
- * lives inside the returned instance — M4 CONSEQUENCE: the shell must
- * hold ONE stable engine instance (new metrics requires a new engine).
+ * lives inside the returned instance — the shell must hold ONE stable
+ * engine instance (new metrics requires a new engine).
  */
 export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): LayoutEngine {
   const lineCache = new Map<string, CachedLines>()
@@ -227,7 +226,7 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
         width: opts.page.width,
         height: opts.page.height,
       })
-      // M2: all pages share opts geometry. TODO(sections): per-section
+      // All pages share opts geometry. TODO(sections): per-section
       // page descriptors.
       const contentBox: Rect = Object.freeze({
         x: opts.margins.left,
@@ -269,7 +268,7 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
         }
       }
 
-      // M2.5 BACKWARD-RESUME through bonded chains: a bonded
+      // BACKWARD-RESUME through bonded chains: a bonded
       // predecessor's placement consumed its successor's first-line
       // height (the bond lookahead), so an edit inside the successor
       // can invalidate the predecessor's cached placement — extend the
@@ -355,10 +354,10 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
           state = { pageIndex: state.pageIndex + 1, y: 0 }
         }
 
-        // M2.5: headings route through breakLines exactly like
-        // paragraphs — E6 (heading entries in the walk cache) became
-        // load-bearing. TODO(M4): level-based default styles arrive
-        // from the ADAPTER; level is not a layout input here.
+        // Headings route through breakLines exactly like paragraphs —
+        // heading entries in the walk cache are load-bearing.
+        // TODO(adapter): level-based default styles arrive from the
+        // ADAPTER; level is not a layout input here.
         const entryState = state
         const results = getLines(i)
         const control = controlOf(block)
@@ -583,8 +582,8 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
 
       walkCache = newCache
 
-      // Pages derived: every opened page holds >= 1 line (M2
-      // invariant), so this equals the M2 closePage count exactly.
+      // Pages derived: every opened page holds >= 1 line (slicer
+      // invariant), so this equals the closePage count exactly.
       // Empty doc → 1 page.
       let maxPage = 0
       for (const line of lines) if (line.pageIndex > maxPage) maxPage = line.pageIndex
@@ -665,7 +664,7 @@ function bondExistsBetween(doc: SemanticDoc, i: number): boolean {
   return a.flow?.keepNext === true || b.flow?.keepPrevious === true
 }
 
-// The M2 placement machine. PURE: a function of (block, LineResults,
+// The placement machine. PURE: a function of (block, LineResults,
 // entry state, content-box height, widow control, bond context, split
 // backup) — the Markov property made physically true of the code.
 // `bonded` (an ACTIVE bond to the successor) preempts R3: when the
@@ -787,15 +786,41 @@ function sameState(a: WalkState, b: WalkState): boolean {
 }
 
 // contentHash covers everything that determines a block's lines and
-// placement: kind (both kinds line up since M2.5), runs (text +
+// placement: kind (both kinds produce lines), runs (text +
 // style), and flow (keepLines/widowControl/bonds/forced breaks). An
 // id is NOT part of the hash — it is compared separately.
+//
+// IDENTITY CACHE: hashes are memoized on the block
+// OBJECT. ADAPTER CONTRACT: the shell must reuse unchanged Block
+// objects BY REFERENCE across layout calls (ProseMirror's structural
+// sharing makes this natural — the app-side adapter caches on PM node
+// identity). A shell that rebuilds all Block objects every call pays
+// the full stringify again — correct, just unshared. Blocks are
+// treated as immutable; a mutated
+// block must be a NEW object (or the stale hash would be trusted —
+// the parity fuzzer plus the hash-identity tests pin both directions).
+const blockHashCache = new WeakMap<Block, string>()
+
 function hashBlock(block: Block): string {
-  return stableStringify({
-    kind: block.kind,
-    runs: block.runs.map((run) => ({ text: run.text, style: run.style })),
-    flow: block.flow,
-  })
+  let hash = blockHashCache.get(block)
+  if (hash === undefined) {
+    hash = stableStringify({
+      kind: block.kind,
+      runs: block.runs.map((run) => ({ text: run.text, style: run.style })),
+      flow: block.flow,
+    })
+    blockHashCache.set(block, hash)
+    hashCallCount += 1
+  }
+  return hash
+}
+
+// TEMP (validation): counts hashBlock stringification misses
+// (cache misses). Remove once the identity cache is done being
+// validated live.
+export let hashCallCount = 0
+export function resetHashCallCount() {
+  hashCallCount = 0
 }
 
 // Hand-rolled stable stringify: object keys sorted, undefined-valued

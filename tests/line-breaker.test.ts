@@ -8,12 +8,12 @@ const maxWidth = 100
 
 const style: TextStyle = { fontFamily: 'sans-serif', fontSize: 16 }
 const bold: TextStyle = { fontFamily: 'sans-serif', fontSize: 16, bold: true }
-// Document default font: feeds empty-line metrics (M2 baseStyle).
+// Document default font: feeds empty-line metrics.
 const baseStyle: TextStyle = { fontFamily: 'sans-serif', fontSize: 16 }
 
 const run = (text: string, s: TextStyle = style): Run => ({ text, style: s })
 
-describe('breakLines (M1 greedy breaker)', () => {
+describe('breakLines (greedy breaker)', () => {
   it('empty runs produce exactly one empty line', () => {
     for (const runs of [[], [run('')]] as const) {
       const lines = breakLines(runs, FakeMetrics, maxWidth, baseStyle)
@@ -21,7 +21,7 @@ describe('breakLines (M1 greedy breaker)', () => {
       expect(lines[0].start).toBe(0)
       expect(lines[0].end).toBe(0)
       expect(lines[0].segments).toEqual([])
-      // M2 baseStyle: no runs to measure → baseStyle metrics.
+      // No runs to measure → baseStyle metrics.
       // ascent 0.85 × 16 + descent 0.25 × 16 = 17.6; baseline 13.6.
       expect(lines[0].width).toBe(0)
       expect(lines[0].height).toBeCloseTo(17.6)

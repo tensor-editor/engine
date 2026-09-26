@@ -3,7 +3,7 @@ import { createLayoutEngine } from '../src/index.js'
 import { FakeMetrics } from './fake-metrics.js'
 import type { Block, FlowPolicy, LayoutOptions, SemanticDoc, TextStyle } from '../src/index.js'
 
-// M2.5 FLOW POLICY: Word-exact boundary bonds, forced page breaks.
+// FLOW POLICY: Word-exact boundary bonds, forced page breaks.
 // FakeMetrics at fontSize 100 → 110px lines; Letter contentBox 624×864
 // → cap = 7; 12 "aaaa " tokens (600px) per line.
 const style16: TextStyle = { fontFamily: 'sans-serif', fontSize: 16 }
@@ -41,8 +41,8 @@ const pagesOf = (result: { lines: { pageIndex: number }[] }) => result.lines.map
 const pageLines = (result: { lines: { pageIndex: number; lineIndex: number }[] }, p: number) =>
   result.lines.filter((l) => l.pageIndex === p).map((l) => l.lineIndex)
 
-describe('flow policy (M2.5): headings, bonds, forced breaks', () => {
-  it('STEP 1: a heading-only doc lays out with real lines', () => {
+describe('flow policy: headings, bonds, forced breaks', () => {
+  it('a heading-only doc lays out with real lines', () => {
     const result = layout({ baseStyle, blocks: [heading('h', 1)] })
     expect(result.pages).toHaveLength(1)
     expect(result.lines).toHaveLength(1)
@@ -57,7 +57,7 @@ describe('flow policy (M2.5): headings, bonds, forced breaks', () => {
     expect(result.lines[0].baseline).toBeCloseTo(85)
   })
 
-  it('STEP 1: a heading and a paragraph stack in document order', () => {
+  it('a heading and a paragraph stack in document order', () => {
     const result = layout({ baseStyle, blocks: [heading('h', 1), para('p', 1)] })
     expect(result.lines.map((l) => l.blockId)).toEqual(['h', 'p'])
     expect(result.lines[0].rect.y).toBe(0)

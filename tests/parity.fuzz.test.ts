@@ -10,7 +10,7 @@ import type {
   TextStyle,
 } from '../src/index.js'
 
-// PARITY FUZZ — THE M3 HEADLINE. After every op, the warm engine's
+// PARITY FUZZ — the headline guarantee. After every op, the warm engine's
 // output must deep-equal a fresh cold engine's output (version
 // excluded). This is the old DOM-based system's DEBUG_VERIFY_RECONVERGENCE
 // — except it's a test that must pass forever, not a debug flag for
@@ -29,7 +29,7 @@ function mulberry32(seed: number): () => number {
 }
 
 const FONT_SIZES = [16, 24, 32, 100] // mixed heights: 17.6 / 26.4 / 35.2 / 110
-const LINE_HEIGHTS = [1.0, 1.5, 2.0] // half-leading model (E1)
+const LINE_HEIGHTS = [1.0, 1.5, 2.0] // half-leading model
 const BASE_STYLE: TextStyle = { fontFamily: 'sans-serif', fontSize: 16 }
 const BASE_OPTS: LayoutOptions = {
   page: { width: 816, height: 1056 },
@@ -39,7 +39,7 @@ const BASE_OPTS: LayoutOptions = {
 const randInt = (rng: () => number, lo: number, hi: number) =>
   lo + Math.floor(rng() * (hi - lo + 1))
 
-// M2.5 flow menu: bonds (keepNext/keepPrevious), forced breaks
+// Flow menu: bonds (keepNext/keepPrevious), forced breaks
 // (breakBefore/breakAfter), keep-together, widow-off, or none.
 const FLOW_MENU: (FlowPolicy | undefined)[] = [
   { keepLines: true },
@@ -54,7 +54,7 @@ const FLOW_MENU: (FlowPolicy | undefined)[] = [
 function randomBlock(rng: () => number, id: string): Block {
   // 1-3 runs of random length; 0-token runs keep the empty-paragraph
   // placeholder path exercised. Occasional heading blocks exercise real
-  // heading layout (M2.5).
+  // heading layout.
   const runs = Array.from({ length: randInt(rng, 1, 3) }, () => ({
     text: 'aaaa '.repeat(randInt(rng, 0, 8)),
     style: {

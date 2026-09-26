@@ -1,4 +1,4 @@
-// tensor-engine data model (M0). Pure data declarations only — behavior
+// tensor-engine data model. Pure data declarations only — behavior
 // lives in layout.ts.
 
 export interface Rect {
@@ -92,12 +92,12 @@ export interface FlowPolicy {
    */
   widowControl?: boolean
   /**
-   * M2.5 BOND (A→B): A's last line and B's first line share a page.
+   * BOND (A→B): A's last line and B's first line share a page.
    * Enforced at A's placement via a lookahead of B's first-line height;
    * bounded shapes, give-up drops loudly.
    */
   keepNext?: boolean
-  /** M2.5 BOND: same bond as keepNext on the previous block — one mechanism, two spellings. */
+  /** BOND: same bond as keepNext on the previous block — one mechanism, two spellings. */
   keepPrevious?: boolean
   /**
    * Structural tier (precedence 1): force a page break before this
@@ -153,7 +153,7 @@ export interface PageGeometry {
   index: number
   size: Rect
   contentBox: Rect
-  // M2: all pages share opts geometry. TODO(sections): per-section
+  // All pages share opts geometry. TODO(sections): per-section
   // page descriptors.
 }
 

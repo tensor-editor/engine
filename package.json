@@ -1,16 +1,23 @@
 {
   "name": "@tensor-editor/engine",
   "version": "0.0.1",
-  "private": true,
+  "description": "Headless document layout engine for the Tensor editor: semantic blocks in, positioned pages and line boxes out.",
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
+  "sideEffects": false,
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "import": "./src/index.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
+  "files": [
+    "dist",
+    "ARCHITECTURE.md",
+    "LICENSE"
+  ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

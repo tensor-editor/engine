@@ -1,9 +1,9 @@
 import type { LineResult, LineSegment, Run, TextMetrics, TextStyle } from './types.js'
 
-// M1 greedy line breaker — deliberately simple: greedy fill; break at
+// Greedy line breaker — deliberately simple: greedy fill; break at
 // spaces only; trim the space at the break; no hyphenation; hard-split
 // tokens longer than the line.
-// TODO(M3+): proper UAX #14 line breaking, whitespace collapsing,
+// TODO: proper UAX #14 line breaking, whitespace collapsing,
 // hyphenation, overflow policy.
 
 // Half-leading (CSS-style) for one box: with content height c = a + d
@@ -32,8 +32,8 @@ export function breakLines(
     // A line with no runs has no style of its own to measure, so its
     // height/baseline fall back to the document baseStyle (REQUIRED,
     // supplied by the adapter — defaults live at the edges, never in
-    // the engine). Fulfilled by M2 baseStyle. Width stays 0 (no
-    // glyphs). Half-leading model applies to baseStyle.lineHeight.
+    // the engine). Width stays 0 (no glyphs). Half-leading model
+    // applies to baseStyle.lineHeight.
     const ascent = metrics.ascent(baseStyle)
     const descent = metrics.descent(baseStyle)
     const { height, baseline } = halfLeading(ascent, descent, baseStyle)
@@ -139,7 +139,7 @@ export function breakLines(
     while (fit < len && lineWidth(start, fit + 1) <= maxWidth) fit++
     if (fit === start) {
       // Even a single char overflows: emit it anyway so layout
-      // terminates. TODO(M2+): overflow policy (shrink/clip).
+      // terminates. TODO: overflow policy (shrink/clip).
       fit = start + 1
       lines.push(makeLine(start, fit))
       start = fit

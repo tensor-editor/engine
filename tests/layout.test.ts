@@ -12,7 +12,7 @@ const opts: LayoutOptions = {
   margins: { top: 96, right: 96, bottom: 96, left: 96 },
 }
 
-describe('createLayoutEngine (M1 measured layout)', () => {
+describe('createLayoutEngine (measured layout)', () => {
   it('wraps a paragraph into stacked, measured line boxes', () => {
     // 20 words, single spaces: 99 chars. 62 fit per line, so the greedy
     // breaker splits after word 12 ("word" x12 = 59 chars) and trims the
@@ -47,7 +47,7 @@ describe('createLayoutEngine (M1 measured layout)', () => {
     expect(line1.rangeStart).toBe(60)
     expect(line1.rangeEnd).toBe(99)
     expect(line1.rect.width).toBe(390)
-    // Stacked directly under line 0 (tight, no leading in M1).
+    // Stacked directly under line 0 (tight, no leading).
     expect(line1.rect.y).toBeCloseTo(17.6)
     expect(line1.rect.height).toBeCloseTo(17.6)
 
@@ -62,7 +62,7 @@ describe('createLayoutEngine (M1 measured layout)', () => {
   })
 
   it('gives an empty paragraph a baseStyle-measured placeholder line', () => {
-    // Fulfilled by M2 baseStyle: a line with no runs falls back to the
+    // A line with no runs falls back to the
     // document baseStyle (REQUIRED, supplied by the adapter — defaults
     // live at the edges, never in the engine) for height/baseline.
     // Width stays 0 (no glyphs). This test pins the behavior.

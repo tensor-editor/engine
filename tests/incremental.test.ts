@@ -54,7 +54,7 @@ function scriptedDoc(): SemanticDoc {
   return { baseStyle, blocks }
 }
 
-describe('incremental layout (M3)', () => {
+describe('incremental layout', () => {
   it('scripted 300-block: hash-only edit walks 1, splices 49, rebreaks 1', () => {
     const doc = scriptedDoc()
     const engine = createLayoutEngine({ metrics: FakeMetrics })
@@ -189,7 +189,7 @@ describe('incremental layout (M3)', () => {
     expect(() => cold(doc)).toThrow(/duplicate block id/)
   })
 
-  it('M2.5: an edit inside a bonded successor re-walks its predecessor (stats assert)', () => {
+  it('an edit inside a bonded successor re-walks its predecessor (stats assert)', () => {
     // W (keepNext) is bonded to S: W's cached placement consumed S's
     // first-line height, so an edit inside S invalidates W's cached
     // placement too — the resume point extends BACKWARD through the
@@ -221,7 +221,7 @@ describe('incremental layout (M3)', () => {
     expect(canonical(result)).toEqual(canonical(cold(doc)))
   })
 
-  it('M2.5: splice still fires through unchanged bonded regions', () => {
+  it('splice still fires through unchanged bonded regions', () => {
     const doc: SemanticDoc = {
       baseStyle,
       blocks: [

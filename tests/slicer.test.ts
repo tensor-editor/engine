@@ -29,7 +29,7 @@ const layout = (doc: SemanticDoc, o: LayoutOptions = opts) =>
 const lineIndicesOn = (result: { lines: { pageIndex: number; lineIndex: number }[] }, p: number) =>
   result.lines.filter((l) => l.pageIndex === p).map((l) => l.lineIndex)
 
-describe('slicer (M2 pages, FragmentBreaks, widows, orphans)', () => {
+describe('slicer (pages, FragmentBreaks, widows, orphans)', () => {
   it('1. NATURAL SPLIT: a 10-line block flows 7 + 3 across two pages', () => {
     const doc: SemanticDoc = { baseStyle, blocks: [para('p1', 10)] }
     const result = layout(doc)
@@ -154,7 +154,7 @@ describe('slicer (M2 pages, FragmentBreaks, widows, orphans)', () => {
     expect(block(1)).toEqual([4])
   })
 
-  it('9. (REPLACED in M2.5) loud seams closed — keepNext/keepPrevious/breakBefore/breakAfter are implemented flow semantics; the M2 throw assertions were replaced by behavior tests in tests/flow.test.ts. Deliberate spec change, not a weakening: tests follow the truth.', () => {
+  it('9. loud seams closed — keepNext/keepPrevious/breakBefore/breakAfter are implemented flow semantics; the original throw assertions were replaced by behavior tests in tests/flow.test.ts. Deliberate spec change, not a weakening: tests follow the truth.', () => {
     // The parity fuzzer and flow tests cover the implemented behavior.
     expect(true).toBe(true)
   })
