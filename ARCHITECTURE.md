@@ -129,7 +129,7 @@ export interface SemanticDoc {
 }
 ```
 
-Blocks form a **discriminated union** on `kind`. Both current members carry text runs:
+Blocks form a **discriminated union** on `kind`. All current members carry text runs:
 
 ```ts
 // src/types.ts
@@ -142,7 +142,33 @@ export interface HeadingBlock extends BlockBase {
   level: number
   runs: Run[]
 }
-export type Block = ParagraphBlock | HeadingBlock
+export interface CodeBlockBlock extends BlockBase {
+  kind: 'codeBlock'
+  runs: Run[]
+}
+export type Block = ParagraphBlock | HeadingBlock | CodeBlockBlock
+```
+
+`codeBlock` is the **fragmentable monospace block kind**: source-line semantics in the breaker ([§6.1](#61-the-line-breaker)), everything else (placement machine, orphan/widow, bonds, caching) identical to a paragraph. Its runs carry the **pageless look, matched not redesigned**: the pageless editor renders TipTap's CodeBlock as `<pre><code>` with no font of its own — the UA stylesheet's `pre { font-family: monospace }` applies and the font-size inherits the editor container's document-default size. The shell's adapter emits runs with `fontFamily: 'monospace'` + that size; the engine never restyles.
+
+Every block kind extends `BlockBase`, the shared block-tier fields. `spaceBefore`/`spaceAfter` are vertical cursor padding; the **indent family** is block-level horizontal geometry (px, defaults 0) — it never paints, it only changes wrapping and placement:
+
+- `indentLeft`/`indentRight` narrow the wrap width (`contentBox.width − indentLeft − indentRight`) and pin every `LineBox` `rect.x` at `indentLeft`. Being horizontal, they apply to *every line of every fragment* (unlike `spaceBefore`, a continuation page keeps them).
+- `firstLineIndent` is the one-shot member: ONLY `lineIndex 0` gets the edge `indentLeft + firstLineIndent` and wraps at its own width (so the first line breaks at a different width than wrapped lines). POSITIVE indents inward; NEGATIVE under a larger `indentLeft` is the **hanging indent** (the classic bibliography/legal style) — there is deliberately no third field for it. Its continuation rule mirrors `spaceBefore`'s: applied ONCE at the block's true start; fragments on later pages resume at the base `indentLeft`.
+- **Loud seam**: a negative computed left edge (`indentLeft + firstLineIndent < 0`) throws upfront, before any cache work — the adapter must validate before sending; the engine refuses rather than clip.
+
+```ts
+// src/types.ts
+export interface BlockBase {
+  id: string
+  kind: 'paragraph' | 'heading' | 'codeBlock'
+  flow?: FlowPolicy
+  spaceBefore?: number       // px above the first line; consumed ONCE at block entry
+  spaceAfter?: number        // px after the last line; joins the exit cursor
+  indentLeft?: number        // px left indent: narrows wrapping, shifts rect.x
+  indentRight?: number       // px right indent: narrows wrapping from the right
+  firstLineIndent?: number   // px, line 0 only; negative = hanging under indentLeft
+}
 ```
 
 > [!NOTE]
@@ -345,10 +371,11 @@ while (start < len) {
     start = s + 1
   } else {
     lines.push(makeLine(start, fit)) // hard-split the overlong token
-    start = fit
   }
 }
 ```
+
+`codeBlock` blocks route to a second breaker, `breakCodeLines`, with **source-line semantics** (the v1 rulings live in its source comment): the text splits at every `'\n'` and each source line yields ≥1 `LineResult` (an empty source line yields an empty, full-height one — what a `<pre>` shows); soft wrap is **greedy character wrap** — code must not reflow words; leading whitespace is preserved exactly and internal spaces never collapse; the `'\n'` belongs to no line's range, like the prose breaker's trimmed break space. Both breakers share the run-mapping/measure machinery (`prepare`) and produce the same `LineResult` shape, so the placement machine consumes either without knowing the kind — `kind` routes only the breaker choice in `getLines`, and it is part of the content hash.
 
 Two implementation details that matter for correctness:
 
@@ -543,7 +570,7 @@ Layout is a pure function, so a warm engine can memoize aggressively, **provided
 > [!IMPORTANT]
 > The engine instance may memoize; warm output must deep-equal cold output, verified by the [fuzzer](#9-testing-strategy), forever.
 
-`tests/parity.fuzz.test.ts` is the enforcement: a hand-rolled seeded PRNG (mulberry32, no dependencies)[^mulberry32] generates random documents, with mixed font sizes, mixed `lineHeight`s in $\{1.0, 1.5, 2.0\}$, occasional headings, and the full flow menu, then applies 15 random edit operations (insert / delete / edit / swap-adjacent / opts toggle) per sequence. After **every** op, the warm engine's output must deep-equal a fresh cold engine's output (`version` excluded). 40 sequences, fixed seeds `1001..1040`; a failure prints its seed. The corpus has changed deliberately twice (once for flow policy, once for `lineHeight`): seeds stay, sequences shift, and that is stated in the commit.
+`tests/parity.fuzz.test.ts` is the enforcement: a hand-rolled seeded PRNG (mulberry32, no dependencies)[^mulberry32] generates random documents, with mixed font sizes, mixed `lineHeight`s in $\{1.0, 1.5, 2.0\}$, occasional headings, and the full flow menu, then applies 15 random edit operations (insert / delete / edit / swap-adjacent / opts toggle) per sequence. After **every** op, the warm engine's output must deep-equal a fresh cold engine's output (`version` excluded). 40 sequences, fixed seeds `1001..1040`; a failure prints its seed. The corpus has changed deliberately four times (flow policy, `lineHeight`, `indentLeft`, and the indent-family completion `indentRight`/`firstLineIndent` — the generator's `firstLineIndent` menu is non-negative by construction, because a negative value under a small `indentLeft` is the loud-seam throw; the hanging case is pinned by explicit tests): seeds stay, sequences shift, and that is stated in the commit.
 
 The fuzzer has caught two real cache bugs already, see [§7.7](#77-the-two-fuzzer-catches). It is a test that must pass forever, not a debug flag for suspected staleness.
 
@@ -574,7 +601,7 @@ interface WalkCacheEntry {
 
 - **Context hashes**: `optsHash` + `baseStyleHash`. A change in either (different page size, margins, widow default, or document default font) drops *both* caches wholesale and bumps `cacheEpoch`. The first call is not "invalidation": there was nothing to drop.
 
-`contentHash` is a hand-rolled **stable stringify** (sorted keys, `undefined`-valued keys dropped) of `{kind, runs (text + style), flow}`, everything that determines a block's lines and placement. That is more than "runs+styles": `flow` moves blocks, and `kind` decides whether a block produces lines at all. Block *ids* are not hashed; they are compared separately.
+`contentHash` is a hand-rolled **stable stringify** (sorted keys, `undefined`-valued keys dropped) of `{kind, runs (text + style), flow, spaceBefore, spaceAfter, indentLeft, indentRight, firstLineIndent}`, everything that determines a block's lines and placement. That is more than "runs+styles": `flow` moves blocks, `kind` decides whether a block produces lines at all (and routes the breaker), the block-tier spacing pads the cursor, and the indent family is placement-relevant geometry (it sets both wrap widths and the per-line left edges). Block *ids* are not hashed; they are compared separately.
 
 **The hash identity cache.** Stringifying every block on every call is the warm-path's biggest remaining cost, so `hashBlock` memoizes the hash **on the block object itself**:
 
@@ -717,6 +744,8 @@ The repo is test-first: every behavior lands with a test that failed before it, 
 | `layout.test.ts` | measured line boxes, multi-line stacking, cross-block y, empty-paragraph baseStyle fallback |
 | `slicer.test.ts` | 12 cases pinning R0–R6 + R-ATOMIC, incl. the cap-2 degenerate corner |
 | `flow.test.ts` | 14 cases: bonds (both spellings × both shapes), 3-chain cascade, suffix rule, forced breaks, no empty pages, structural drops, the two composed precedence cases |
+| `indent.test.ts` | 13 cases: the indent family — indentLeft shifts rect.x and wrap width together (fragment continuation keeps it, hash coverage, heading kind-agnosticism, absent ≡ 0); indentRight narrows from the right and survives page splits; firstLineIndent line-0 edge + own wrap width; hanging via negative; first-line indent applied once, never on continuation fragments; negative-left-edge throw; hash coverage for both new fields |
+| `code-block.test.ts` | 8 cases: source-line→LineBox 1:1 + newline exclusion, character soft-wrap, whitespace preservation, page-crossing split geometry, taller-than-page fragmentation, orphan/widow parity, blank lines, cache/kind-routing |
 | `incremental.test.ts` | cache stats: 300-block script (1/1/49), insert/delete/swap/opts-toggle counts, epoch 0→1, bonded re-walk, splice-through-bond |
 | `golden.test.ts` | 3 committed snapshots (see below) |
 | `parity.fuzz.test.ts` | the parity law, 40 seeds × 15 ops |

@@ -33,6 +33,20 @@ const LINE_HEIGHTS = [1.0, 1.5, 2.0] // bottom-only leading model
 // Block-tier spacing: occasional values exercise the entry/exit cursor
 // padding (fits against line tops, spaceAfter in the exit state).
 const SPACING = [20, 110, 300]
+// Block-tier indent: occasional values exercise the narrowed wrap width
+// + rect.x shift (block geometry, not a run style — hash-covered, so
+// an indent edit must re-break/re-place, never serve stale lines).
+const INDENTS = [20, 120, 300]
+// Right half of the family: narrows the wrap from the right, rect.x
+// stays at indentLeft. Continuations keep it — same cache surface.
+const INDENT_RIGHTS = [30, 150]
+// First-line indent: line 0 gets its own edge AND wrap width. NON-
+// NEGATIVE values ONLY here: a negative firstLineIndent under a
+// smaller indentLeft is a negative left edge, which the engine's
+// loud validation seam correctly REFUSES — and independent draws
+// cannot guarantee the pairwise sum ≥ 0. The hanging case (negative
+// under a larger indentLeft) is pinned by explicit tests instead.
+const FIRST_LINE_INDENTS = [40, 160]
 const BASE_STYLE: TextStyle = { fontFamily: 'sans-serif', fontSize: 16 }
 const BASE_OPTS: LayoutOptions = {
   page: { width: 816, height: 1056 },
@@ -78,6 +92,9 @@ function randomBlock(rng: () => number, id: string): Block {
     ...(flow ? { flow } : {}),
     ...(rng() < 0.3 ? { spaceBefore: SPACING[randInt(rng, 0, 2)] } : {}),
     ...(rng() < 0.3 ? { spaceAfter: SPACING[randInt(rng, 0, 2)] } : {}),
+    ...(rng() < 0.25 ? { indentLeft: INDENTS[randInt(rng, 0, 2)] } : {}),
+    ...(rng() < 0.25 ? { indentRight: INDENT_RIGHTS[randInt(rng, 0, 1)] } : {}),
+    ...(rng() < 0.2 ? { firstLineIndent: FIRST_LINE_INDENTS[randInt(rng, 0, 1)] } : {}),
   } as Block
 }
 

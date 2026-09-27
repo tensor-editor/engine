@@ -116,7 +116,7 @@ export interface FlowPolicy {
 
 export interface BlockBase {
   id: string
-  kind: 'paragraph' | 'heading'
+  kind: 'paragraph' | 'heading' | 'codeBlock'
   flow?: FlowPolicy
   /**
    * Vertical space (px) above the block's first line. Applied ONCE at
@@ -129,6 +129,41 @@ export interface BlockBase {
   spaceBefore?: number
   /** Vertical space (px) after the block's last line. Participates in the NEXT block's fits. */
   spaceAfter?: number
+  /**
+   * BLOCK-LEVEL INDENT GEOMETRY (px, default 0): narrows the wrap
+   * width (contentBox.width − indentLeft) and shifts every LineBox
+   * rect.x to indentLeft. It is NOT a run style — it never paints, it
+   * only changes wrapping and placement. Horizontal, so unlike
+   * spaceBefore it applies to EVERY line of EVERY fragment: a mid-block
+   * page split keeps the indent on the continuation.
+   */
+  indentLeft?: number
+  /**
+   * Right half of the indent family (px, default 0): narrows the
+   * wrap width from the RIGHT (contentBox.width − indentLeft −
+   * indentRight). rect.x stays at indentLeft; the measured widths
+   * come from the narrower wrap. Preserved on fragment continuations
+   * like indentLeft.
+   */
+  indentRight?: number
+  /**
+   * FIRST-LINE INDENT (px, default 0; the indent family's third
+   * member): ONLY lineIndex 0 of the block gets effective left
+   * indent = indentLeft + firstLineIndent, and line 0 BREAKS at its
+   * own width (first line wraps at contentBox.width − (indentLeft +
+   * firstLineIndent) − indentRight; wrapped lines at the base
+   * width). POSITIVE indents the first line INWARD; NEGATIVE under a
+   * larger indentLeft is the HANGING indent (the classic
+   * bibliography/legal style: line 0 sits out at the left, wrapped
+   * lines sit in at indentLeft) — there is deliberately NO third
+   * field for it. CONTINUATION RULE (mirror of spaceBefore's): the
+   * first-line indent applies ONCE, at the block's true start
+   * (lineIndex 0, wherever the start rules put it); fragments on
+   * later pages resume at the BASE indent. LOUD SEAM: the engine
+   * THROWS on a negative computed left edge (indentLeft +
+   * firstLineIndent < 0) — the adapter must validate before sending.
+   */
+  firstLineIndent?: number
 }
 
 export interface ParagraphBlock extends BlockBase {
@@ -142,7 +177,22 @@ export interface HeadingBlock extends BlockBase {
   runs: Run[]
 }
 
-export type Block = ParagraphBlock | HeadingBlock
+/**
+ * ADAPTER CONTRACT — PAGELESS LOOK, matched not redesigned: in the
+ * pageless editor a code block renders through TipTap's CodeBlock
+ * extension as `<pre><code>` with NO font of its own; the UA
+ * stylesheet's `pre { font-family: monospace }` applies and the
+ * font-size INHERITS the editor container's document-default size
+ * (16px in the shell config). So the shell's adapter must emit runs
+ * carrying `fontFamily: 'monospace'` + the document-default size —
+ * the engine never restyles, it breaks runs as given.
+ */
+export interface CodeBlockBlock extends BlockBase {
+  kind: 'codeBlock'
+  runs: Run[]
+}
+
+export type Block = ParagraphBlock | HeadingBlock | CodeBlockBlock
 
 export interface SemanticDoc {
   blocks: Block[]

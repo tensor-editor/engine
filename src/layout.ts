@@ -10,7 +10,7 @@ import type {
   SemanticDoc,
   TextMetrics,
 } from './types.js'
-import { breakLines } from './line-breaker.js'
+import { breakCodeLines, breakLines } from './line-breaker.js'
 
 // SLICER VOCABULARY:
 // - A block FRAGMENTS when a page break lands inside it (between its
@@ -187,11 +187,14 @@ interface WalkCacheEntry {
   bonded: boolean
 }
 
-// Line-level cache: a block's LineResults depend only on (runs,
-// maxWidth, baseStyle) — keyed by the block id, re-validated by hash.
+// Line-level cache: a block's LineResults depend only on (runs, the
+// TWO wrap widths — base and line-0 — and baseStyle) — keyed by the
+// block id, re-validated by hash. The indent family feeds both
+// widths; both are part of the key.
 interface CachedLines {
   contentHash: string
   maxWidth: number
+  firstMaxWidth: number
   lines: LineResult[]
 }
 
@@ -218,8 +221,9 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
 
   return {
     layout(doc, opts) {
-      // Loud adapter contract, upfront — before any cache work.
+      // Loud adapter contracts, upfront — before any cache work.
       validateDuplicateIds(doc)
+      validateIndentGeometry(doc)
 
       // Stats hygiene: rebuilt from scratch every call, never
       // accumulated — a stale counter would make the scripted counts lie.
@@ -322,15 +326,42 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
 
       const getLines = (index: number): LineResult[] => {
         const block = doc.blocks[index]
+        // INDENT FAMILY, effect 1 (line breaking): base lines wrap at
+        // contentBox.width − indentLeft − indentRight; ONLY line 0
+        // wraps at contentBox.width − (indentLeft + firstLineIndent) −
+        // indentRight — a NEGATIVE firstLineIndent under a larger
+        // indentLeft is the hanging style, so line 0 can wrap WIDER.
+        // The cache key stores BOTH widths: a re-layout under different
+        // indents (same content) must re-break even before the hash
+        // misses.
+        const maxWidth =
+          contentBox.width - (block.indentLeft ?? 0) - (block.indentRight ?? 0)
+        const firstMaxWidth = maxWidth - (block.firstLineIndent ?? 0)
         const cached = lineCache.get(block.id)
         const hash = hashes[index]
-        if (cached && cached.contentHash === hash && cached.maxWidth === contentBox.width) {
+        if (
+          cached &&
+          cached.contentHash === hash &&
+          cached.maxWidth === maxWidth &&
+          cached.firstMaxWidth === firstMaxWidth
+        ) {
           return cached.lines
         }
-        const results = breakLines(block.runs, metrics, contentBox.width, doc.baseStyle)
+        // Kind routes the breaker: codeBlock breaks under source-line
+        // semantics (explicit newlines honored, greedy character soft
+        // wrap, whitespace preserved); paragraph/heading break at
+        // spaces. Both produce LineResults consumed by the same
+        // placement machine — code fragments BETWEEN lines exactly
+        // like a paragraph (orphan/widow rules apply; the indent
+        // family is block geometry for every kind).
+        const results =
+          block.kind === 'codeBlock'
+            ? breakCodeLines(block.runs, metrics, maxWidth, doc.baseStyle, firstMaxWidth)
+            : breakLines(block.runs, metrics, maxWidth, doc.baseStyle, firstMaxWidth)
         lineCache.set(block.id, {
           contentHash: hash,
-          maxWidth: contentBox.width,
+          maxWidth,
+          firstMaxWidth,
           lines: results,
         })
         stats.linesRebroken += 1
@@ -717,6 +748,19 @@ function placeBlock(
   let hasContent = entryState.y > 0
   y += block.spaceBefore ?? 0
 
+  // INDENT FAMILY, effect 2 (placement): a line's rect.x is its
+  // effective left edge and its width is the line's measured width —
+  // produced by that line's wrap width, so rect.x and the wrap shift
+  // together. indentLeft/indentRight are per-line horizontal
+  // geometry: every fragment keeps them. firstLineIndent is the
+  // one-shot member — the CONTINUATION RULE mirrors spaceBefore's:
+  // lineIndex 0 (the block's true start, wherever the start rules
+  // put it) sits at indentLeft + firstLineIndent and WRAPPED at that
+  // width; every later line — including every line of a continuation
+  // fragment on a later page — resumes at the BASE edge indentLeft.
+  // validateIndentGeometry guarantees the line-0 edge is ≥ 0.
+  const baseLeft = block.indentLeft ?? 0
+  const firstLeft = baseLeft + (block.firstLineIndent ?? 0)
   const place = (from: number, count: number): void => {
     for (let i = from; i < from + count; i++) {
       const result = results[i]
@@ -725,7 +769,7 @@ function placeBlock(
           blockId: block.id,
           lineIndex: i,
           pageIndex,
-          rect: { x: 0, y, width: result.width, height: result.height },
+          rect: { x: i === 0 ? firstLeft : baseLeft, y, width: result.width, height: result.height },
           baseline: result.baseline,
           rangeStart: result.start,
           rangeEnd: result.end,
@@ -821,10 +865,14 @@ function sameState(a: WalkState, b: WalkState): boolean {
 }
 
 // contentHash covers everything that determines a block's lines and
-// placement: kind (both kinds produce lines), runs (text +
-// style), flow (keepLines/widowControl/bonds/forced breaks), and the
+// placement: kind (all three kinds produce lines — and kind also
+// routes the BREAKER: codeBlock vs prose semantics), runs (text +
+// style), flow (keepLines/widowControl/bonds/forced breaks), the
 // block-tier spacing (spaceBefore/spaceAfter — undefined-valued keys
-// are dropped by stableStringify, so absent ≡ unset bit-for-bit). An
+// are dropped by stableStringify, so absent ≡ unset bit-for-bit), and
+// the block-tier indent family (indentLeft/indentRight/firstLineIndent
+// — placement-relevant geometry: they set both wrap widths and the
+// per-line left edges). An
 // id is NOT part of the hash — it is compared separately.
 //
 // IDENTITY CACHE: hashes are memoized on the block
@@ -847,6 +895,9 @@ function hashBlock(block: Block): string {
       flow: block.flow,
       spaceBefore: block.spaceBefore,
       spaceAfter: block.spaceAfter,
+      indentLeft: block.indentLeft,
+      indentRight: block.indentRight,
+      firstLineIndent: block.firstLineIndent,
     })
     blockHashCache.set(block, hash)
     hashCallCount += 1
@@ -882,8 +933,8 @@ function stableStringify(value: unknown): string {
 }
 
 // Duplicate ids are an adapter-contract violation, loud and upfront —
-// before any cache work. Also protects the id-keyed lineCache and the
-// splice id-verification from ambiguity.
+// before any cache work. Also protects the id-keyed lineCache and
+// the splice id-verification from ambiguity.
 function validateDuplicateIds(doc: SemanticDoc): void {
   const seen = new Set<string>()
   for (const block of doc.blocks) {
@@ -891,6 +942,25 @@ function validateDuplicateIds(doc: SemanticDoc): void {
       throw new Error(`duplicate block id: ${block.id}`)
     }
     seen.add(block.id)
+  }
+}
+
+// INDENT SEAM (loud, upfront — next to the duplicate-id gate): a first
+// line whose computed left edge (indentLeft + firstLineIndent) is
+// negative would start left of the content box. The engine REFUSES
+// that geometry — no clipping, no silent shift. ADAPTER CONTRACT: the
+// adapter must validate before sending; this throw is the backstop.
+// Only the SUM is checked: a negative sum is the one way any line's
+// left edge goes negative (base lines sit at indentLeft alone, which
+// the same sum covers when firstLineIndent is 0).
+function validateIndentGeometry(doc: SemanticDoc): void {
+  for (const block of doc.blocks) {
+    const left = (block.indentLeft ?? 0) + (block.firstLineIndent ?? 0)
+    if (left < 0) {
+      throw new Error(
+        `block "${block.id}": indentLeft ${block.indentLeft ?? 0} + firstLineIndent ${block.firstLineIndent ?? 0} = ${left} < 0 — the first line would start left of the content box; the adapter must validate before sending`,
+      )
+    }
   }
 }
 
