@@ -80,6 +80,15 @@ function randomBlock(rng: () => number, id: string): Block {
       ...(rng() < 0.5
         ? { lineHeight: LINE_HEIGHTS[randInt(rng, 0, 2)] }
         : {}),
+      // M-STYLES: occasional variant-caps draws so fontVariant flows
+      // through contentHash and the parity law from day one. FakeMetrics
+      // ignores it (width = f(text)), so these blocks are geometrically
+      // identical to their variant-free twins — the hash is the only
+      // thing that distinguishes them, which is the point. NOTE: this
+      // corpus change is DELIBERATE (same fixed seeds, new draws — the
+      // generated sequences differ from the pre-fontVariant corpus by
+      // construction); parity is re-established by this suite passing.
+      ...(rng() < 0.2 ? { fontVariant: 'small-caps' } : {}),
     },
   }))
   const kind = rng() < 0.2 ? 'heading' : 'paragraph'

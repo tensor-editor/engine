@@ -26,6 +26,18 @@ export interface TextStyle {
    * lineHeight-free layout — pinned bit-for-bit by tests.
    */
   lineHeight?: number
+  /**
+   * Variant caps (M-STYLES): 'small-caps' is LAYOUT-RELEVANT, not
+   * paint-only — small-cap glyphs measure narrower than full caps in
+   * real fonts, so the metrics PORT consumes it (measure/ascent/
+   * descent all key on the full style). The engine never interprets
+   * it: it flows through run.style into contentHash (a variant edit
+   * re-breaks the run's block) and is handed back opaquely to the
+   * measurer. Test doubles may ignore it (FakeMetrics does — its
+   * width depends only on text length), but the REAL metrics must
+   * apply it or measured widths diverge from painted advances.
+   */
+  fontVariant?: 'small-caps' | 'normal'
 }
 
 export interface Run {
