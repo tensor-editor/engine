@@ -158,6 +158,22 @@ describe('codeBlock: fragmentable monospace block kind', () => {
     ])
   })
 
+  it('7b. P1: an empty codeBlock with a present zero-length run measures under it', () => {
+    // The adapter's empty-textblock projection (one zero-length run
+    // with the effective style): a present run wins over baseStyle —
+    // same ruling as the blank source line.
+    const result = layout({
+      baseStyle,
+      blocks: [{ id: 'e', kind: 'codeBlock', runs: [run('')] }],
+    })
+    expect(result.lines).toHaveLength(1)
+    expect(result.lines[0].rect.height).toBe(17.6) // code font 16
+    expect(result.lines[0].baseline).toBeCloseTo(13.6)
+    // ...while NO runs at all keeps the baseStyle fallback.
+    const bare = layout({ baseStyle, blocks: [{ id: 'b', kind: 'codeBlock', runs: [] }] })
+    expect(bare.lines[0].rect.height).toBe(17.6)
+  })
+
   it('8. caching/hash rules unchanged: warm re-layout serves the cache; kind routes the breaker', () => {
     const engine = createLayoutEngine({ metrics: FakeMetrics })
     const doc: SemanticDoc = { baseStyle, blocks: [code('c', 'a b\nc')] }

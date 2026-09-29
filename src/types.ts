@@ -198,8 +198,10 @@ export interface SemanticDoc {
   blocks: Block[]
   /**
    * REQUIRED document default font, supplied by the adapter — defaults
-   * live at the edges, never in the engine. Feeds empty-line metrics (a
-   * line with no runs has no style of its own to measure).
+   * live at the edges, never in the engine. Feeds empty-line metrics:
+   * a PRESENT run's style (even zero-length — the adapter's
+   * empty-textblock projection) wins over baseStyle; baseStyle is the
+   * no-runs-at-all fallback only (P1 ruling).
    */
   baseStyle: TextStyle
 }

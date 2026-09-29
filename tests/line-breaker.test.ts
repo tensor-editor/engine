@@ -21,12 +21,32 @@ describe('breakLines (greedy breaker)', () => {
       expect(lines[0].start).toBe(0)
       expect(lines[0].end).toBe(0)
       expect(lines[0].segments).toEqual([])
-      // No runs to measure → baseStyle metrics.
+      // No runs, and a zero-length run whose style matches baseStyle:
+      // both measure baseStyle metrics.
       // ascent 0.85 × 16 + descent 0.25 × 16 = 17.6; baseline 13.6.
       expect(lines[0].width).toBe(0)
       expect(lines[0].height).toBeCloseTo(17.6)
       expect(lines[0].baseline).toBeCloseTo(13.6)
     }
+  })
+
+  it('P1: a PRESENT zero-length run\'s style wins over baseStyle (empty-line inheritance)', () => {
+    // The adapter's empty-textblock projection: one zero-length run
+    // with the paragraph's effective style. An empty paragraph in a
+    // 2.0-spaced doc must measure 2.0 — baseStyle (1.0 here) would
+    // shrink the blank line inside a 2.0 block.
+    const tall: TextStyle = { fontFamily: 'sans-serif', fontSize: 16, lineHeight: 2.0 }
+    const lines = breakLines([run('', tall)], FakeMetrics, maxWidth, baseStyle)
+    expect(lines).toHaveLength(1)
+    expect(lines[0].height).toBeCloseTo(35.2) // (13.6 + 4) × 2
+    expect(lines[0].baseline).toBeCloseTo(13.6) // bottom-only leading
+
+    // A bigger EMPTY run sizes the line too (blank line in a 24px
+    // paragraph must match its 24px siblings, not the 16px default).
+    const big: TextStyle = { fontFamily: 'sans-serif', fontSize: 24 }
+    const bigLines = breakLines([run('', big)], FakeMetrics, maxWidth, baseStyle)
+    expect(bigLines[0].height).toBeCloseTo(0.85 * 24 + 0.25 * 24) // 26.4
+    expect(bigLines[0].baseline).toBeCloseTo(0.85 * 24)
   })
 
   it('text that fits produces a single line', () => {

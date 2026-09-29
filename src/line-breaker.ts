@@ -124,14 +124,18 @@ export function breakLines(
   const { concatenated, len, lineWidth, makeLine } = prepare(runs, metrics)
 
   if (len === 0) {
-    // A line with no runs has no style of its own to measure, so its
-    // height/baseline fall back to the document baseStyle (REQUIRED,
-    // supplied by the adapter — defaults live at the edges, never in
-    // the engine). Width stays 0 (no glyphs). The bottom-only leading
-    // model applies to baseStyle.lineHeight.
-    const ascent = metrics.ascent(baseStyle)
-    const descent = metrics.descent(baseStyle)
-    const { height, baseline } = lineBoxVertical(ascent, descent, baseStyle)
+    // EMPTY-LINE METRICS (P1 ruling): a PRESENT run's style wins over
+    // baseStyle — a zero-length run still carries its style, and the
+    // adapter's empty-textblock projection (one zero-length run with
+    // the paragraph's effective style) depends on it: an empty
+    // paragraph in a 2.0-spaced doc must measure 2.0. baseStyle
+    // remains the fallback only when there are NO runs at all (the
+    // true empty-document case; REQUIRED, supplied by the adapter —
+    // defaults live at the edges, never in the engine). Width stays 0.
+    const style = runs[0]?.style ?? baseStyle
+    const ascent = metrics.ascent(style)
+    const descent = metrics.descent(style)
+    const { height, baseline } = lineBoxVertical(ascent, descent, style)
     return [{
       start: 0,
       end: 0,
@@ -211,8 +215,9 @@ export function breakLines(
 //    so it measures under the FIRST run's style — the code font — so
 //    a blank line is exactly as tall as its siblings (baseStyle
 //    would misalign a block whose code font is a different size). A
-//    block with no text at all keeps the prose empty-document
-//    fallback (baseStyle), see breakLines.
+//    block with no text at all follows the same P1 rule: a present
+//    (even zero-length) run's style wins; baseStyle only when there
+//    are no runs, see breakLines.
 export function breakCodeLines(
   runs: readonly Run[],
   metrics: TextMetrics,
@@ -223,11 +228,13 @@ export function breakCodeLines(
   const { concatenated, len, lineWidth, makeLine } = prepare(runs, metrics)
 
   if (len === 0) {
-    // Same empty-document fallback as prose: a line with no runs has
-    // no style of its own to measure.
-    const ascent = metrics.ascent(baseStyle)
-    const descent = metrics.descent(baseStyle)
-    const { height, baseline } = lineBoxVertical(ascent, descent, baseStyle)
+    // Same P1 ruling as prose: a PRESENT (even zero-length) run's
+    // style wins over baseStyle; baseStyle is the no-runs-at-all
+    // fallback only.
+    const style = runs[0]?.style ?? baseStyle
+    const ascent = metrics.ascent(style)
+    const descent = metrics.descent(style)
+    const { height, baseline } = lineBoxVertical(ascent, descent, style)
     return [{ start: 0, end: 0, segments: [], width: 0, height, baseline }]
   }
 
