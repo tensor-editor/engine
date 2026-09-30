@@ -1,6 +1,7 @@
 import type {
   Block,
   FragmentBreak,
+  ImageBlock,
   LayoutEngine,
   LastStats,
   LineBox,
@@ -11,7 +12,7 @@ import type {
   SemanticDoc,
   TextMetrics,
 } from './types.js'
-import { breakCodeLines, breakLines } from './line-breaker.js'
+import { breakCodeLines, breakLines, fitDownImage } from './line-breaker.js'
 
 // SLICER VOCABULARY:
 // - A block FRAGMENTS when a page break lands inside it (between its
@@ -247,6 +248,8 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
       // Loud adapter contracts, upfront — before any cache work.
       validateDuplicateIds(doc)
       validateIndentGeometry(doc)
+      validateInlineInCode(doc)
+      validateFloatFlow(doc)
 
       // Stats hygiene: rebuilt from scratch every call, never
       // accumulated — a stale counter would make the scripted counts lie.
@@ -455,10 +458,17 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
         // TODO(adapter): level-based default styles arrive from the
         // ADAPTER; level is not a layout input here.
         const entryState = state
-        const results = getLines(i)
+        // ANCHORED FLOAT (E-IMG-3, v1 wrap NONE): a floated image
+        // enters the SAME walk machine but never placeBlock — zero
+        // flow presence (the full model comment lives at placeFloat).
+        // getLines is skipped entirely: no synthetic line, nothing to
+        // fit, nothing to bond (validateFloatFlow refused flow).
+        const floated = block.kind === 'image' && block.float != null
+        const results: readonly LineResult[] = floated ? [] : getLines(i)
         const control = controlOf(block)
         const next = doc.blocks[i + 1]
         const bondExists =
+          !floated &&
           next !== undefined &&
           (block.flow?.keepNext === true || next.flow?.keepPrevious === true)
         const structural =
@@ -467,10 +477,13 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
         const bonded = bondExists && !structural
 
         let currentEntry = entryState
-        let placed = placeBlock(
-          block, results, currentEntry, contentBox.width, contentBox.height,
-          control, bonded, false,
-        )
+        let placed =
+          block.kind === 'image' && block.float != null
+            ? placeFloat(block, block.float, currentEntry, size, contentBox)
+            : placeBlock(
+                block, results, currentEntry, contentBox.width, contentBox.height,
+                control, bonded, false,
+              )
         let movedViaShape1 = false
 
         // BOND-DROP HISTORY FLAG: a placement committed while its own
@@ -768,13 +781,12 @@ export function alignOffset(
 }
 
 /**
- * Image fit-down (E-IMG-1): the engine owns this math — the shell must
- * never scale (a shell-side scale would be a second derivation,
- * violating the two-sided law). Down-only, aspect-preserving: natural
- * size when both axes fit the content box, else scale by the binding
- * axis so BOTH fit. Degenerate guards, both commented at their sites:
- * a zero-dim intrinsic degrades to 1×1, and the 1px floor is
- * unreachable except in a degenerate content box.
+ * Image fit-down (E-IMG-1): the block placement's box — the ENGINE owns
+ * this math (two-sided law: the shell must never scale; it imports the
+ * primitive). Delegates to fitDownImage (line-breaker.ts) — the ONE
+ * scale primitive, extracted in E-IMG-2 so the INLINE clamp shares the
+ * formula with the block fit-down: one scale, no forked math. The
+ * E-IMG-1 rulings (zero-dim degrade, 1px floor) live at the primitive.
  */
 function imagePlacedSize(
   width: number,
@@ -782,28 +794,7 @@ function imagePlacedSize(
   contentWidth: number,
   contentHeight: number,
 ): { width: number; height: number } {
-  // ZERO-DIM GUARD (loud-seam family — NO throw): ANY non-positive or
-  // non-finite axis (per-axis trigger, not just both-zero — a 100×0
-  // image is as degenerate as a 0×0 one) degrades the WHOLE intrinsic
-  // to 1×1; the valid axis is not preserved, because half an image is
-  // not an image. ADAPTER CONTRACT: the shell should prevent zero-dim
-  // images before sending; this is the engine's deterministic
-  // backstop, never a license to send them.
-  const degenerate =
-    !(Number.isFinite(width) && width > 0) || !(Number.isFinite(height) && height > 0)
-  const w = degenerate ? 1 : width
-  const h = degenerate ? 1 : height
-  const scale = Math.min(contentWidth / w, contentHeight / h, 1)
-  let placedW = w * scale
-  let placedH = h * scale
-  // 1px FLOOR (R6 floor family): only reachable when the content box
-  // itself is degenerate (contentBox width or height <= 0 makes the
-  // scale 0) — a page/contentBox too small for any image still PLACES
-  // it, never loops. The aspect breaks only here, in geometry that
-  // cannot hold any image at all.
-  if (!(placedW > 0)) placedW = 1
-  if (!(placedH > 0)) placedH = 1
-  return { width: placedW, height: placedH }
+  return fitDownImage(width, height, contentWidth, contentHeight)
 }
 
 // BOND LOOKAHEAD — predicts whether a block's FIRST line lands on the
@@ -1061,12 +1052,109 @@ function placeBlock(
   return { lineBoxes, breaks, placedRects, exitState: { pageIndex, y } }
 }
 
+// ANCHORED FLOAT (E-IMG-3, v1 wrap NONE) — the model, in one breath:
+// moves-with-text comes free — the anchor is the block's flow
+// position, so reflowing text repositions the float. Wrap modes
+// (square/tight) are a FUTURE issue; v1 floats do not affect line
+// breaking. z is PAINT ORDER, not layout.
+//
+// ZERO FLOW PRESENCE: the block contributes nothing to the flow — no
+// height, no spaceBefore/After on the cursor, no fits, no bonds
+// (loud seam: validateFloatFlow), no fragmentation. Its walk-cache
+// entry is pure placement data: exitState === entryState,
+// lineBoxes/breaks empty, the one PlacedRect the entire output. The
+// rect is a PURE function of (entry state, block, opts) — the Markov
+// property holds; nothing history-dependent (the 'danced' family is
+// untouched).
+//
+// ANCHOR + ANCHOR-FRAGMENT RULING (spec item 8, ruled in the
+// pre-coding presentation): the anchor is the flow position where the
+// block would have started — the walk cursor at its doc position,
+// plus spaceBefore (the y a non-floated image's rect would have
+// begun at; the cursor itself never moves). A v1 float sits BETWEEN
+// blocks, so that cursor is always at a LINE boundary: when the
+// preceding (anchor) paragraph fragments across a page boundary, the
+// cursor is by construction on the page of the fragment that ENDS
+// the block — the float belongs to the fragment where that flow
+// position lands, even when a negative dy visually drags the rect
+// over text living on an EARLIER fragment's page. pageIndex resolves
+// from the ANCHOR, never from the shifted rect.
+//
+// RECT DERIVATION: anchor + (dx, dy), clamped to the FULL PAGE BOX
+// (margins included — the page is the canvas; a float may sit IN the
+// margin), emitted CONTENT-BOX-RELATIVE like every PlacedRect — a
+// float in the margin carries negative x/y (or x beyond the content
+// width); one frame for the whole placed[] array. The clamp bounds
+// are the page box expressed in the content frame (see below). Dims:
+// the unchanged E-IMG-1 fit-down (content box — a float never
+// outgrows what a block image could); anchor x via the shared
+// alignOffset (align stays meaningful for floats; the indent family
+// stays ignored, the image family rule), then dx.
+//
+// Degenerate guard: a page box narrower/shorter than the placed rect
+// (negative margins) clamps to the page's left/top edge — the
+// Math.max(hi, lo) family, deterministic, never a loop.
+function placeFloat(
+  block: ImageBlock,
+  float: { dx: number; dy: number; z: 'front' | 'behind' },
+  entry: WalkState,
+  size: Rect,
+  contentBox: Rect,
+): { lineBoxes: LineBox[]; breaks: FragmentBreak[]; placedRects: PlacedRect[]; exitState: WalkState } {
+  const dims = imagePlacedSize(block.width, block.height, contentBox.width, contentBox.height)
+  const anchorX = alignOffset(block.align ?? 'left', dims.width, contentBox.width)
+  const anchorY = entry.y + (block.spaceBefore ?? 0)
+  // PAGE-BOX CLAMP, expressed in the CONTENT frame (the emitted frame):
+  // the page box [0, size.width] × [0, size.height] maps to
+  // [−contentBox.x, size.width − w − contentBox.x] etc., so a float may
+  // sit anywhere in the page INCLUDING the margins (negative
+  // content-relative coordinates). Computing and clamping in the
+  // emitted frame directly avoids a page-frame round trip whose IEEE
+  // rounding would perturb a dy=0/dx=0 rect off its anchor — the rect
+  // must be BIT-IDENTICAL to the anchor + offset when no clamp fires.
+  // Degenerate guard: a page box narrower/shorter than the placed rect
+  // (negative margins) clamps to the page's left/top edge — the
+  // Math.max(hi, lo) family, deterministic, never a loop.
+  const clamp = (value: number, lo: number, hi: number): number =>
+    Math.min(Math.max(value, lo), Math.max(hi, lo))
+  const x = clamp(
+    anchorX + float.dx,
+    -contentBox.x,
+    size.width - dims.width - contentBox.x,
+  )
+  const y = clamp(
+    anchorY + float.dy,
+    -contentBox.y,
+    size.height - dims.height - contentBox.y,
+  )
+  const rect: Rect = { x, y, width: dims.width, height: dims.height }
+  return {
+    lineBoxes: [],
+    breaks: [],
+    placedRects: [
+      freezePlacedRect({
+        blockId: block.id,
+        kind: 'image',
+        src: block.src,
+        alt: block.alt,
+        pageIndex: entry.pageIndex,
+        rect,
+        float: { dx: float.dx, dy: float.dy },
+        z: float.z,
+      }),
+    ],
+    exitState: entry,
+  }
+}
+
 // Enforced immutability at creation: freeze the record and its rect
 // (leaf records — idempotent, one-time cost). Same posture as
 // freezeLineBox: emitted PlacedRects are shared zero-copy across
-// results and the walk cache.
+// results and the walk cache. E-IMG-3: a floated rect's float echo is
+// frozen with it.
 function freezePlacedRect(placed: PlacedRect): PlacedRect {
   Object.freeze(placed.rect)
+  if (placed.float !== undefined) Object.freeze(placed.float)
   return Object.freeze(placed)
 }
 
@@ -1098,6 +1186,10 @@ function sameState(a: WalkState, b: WalkState): boolean {
 // PARTICIPATE WHEN THEY ECHO INTO OUTPUT — cache-relevance, not
 // geometry-relevance, is the rule (placed[] echoes src and alt; a
 // spliced-past alt edit would serve a stale echo and break parity).
+// E-IMG-3 extends the same rule to float (placed[] echoes the rect
+// and z). E-IMG-2: runs hash through the union dispatch — text runs
+// {text, style} as before, inline objects by their full field set
+// {kind, src, width, height, alt}.
 // An id is NOT part of the hash — it is compared separately.
 //
 // IDENTITY CACHE: hashes are memoized on the block
@@ -1132,10 +1224,36 @@ function hashBlock(block: Block): string {
             height: block.height,
             align: block.align,
             alt: block.alt,
+            // E-IMG-3: float rides the hash — cache-relevant, not just
+            // geometry-relevant: the placed rect AND z echo into
+            // placed[], so a spliced-past float edit would serve a
+            // stale echo (the E-IMG-1 alt ruling family). null is
+            // dropped with undefined by stableStringify → absent ≡
+            // unset bit-for-bit, so float-free image hashes are
+            // unchanged.
+            float: block.float ?? undefined,
           }
         : {
             ...base,
-            runs: block.runs.map((run) => ({ text: run.text, style: run.style })),
+            runs: block.runs.map((run) =>
+              // E-IMG-2 run union dispatch: an inline object's fields
+              // are included BY CONSTRUCTION — the mapping names
+              // kind/src/width/height/alt, so any of their edits
+              // re-breaks the block. A text run maps to {text, style}
+              // BIT-IDENTICALLY to the pre-union hash (an explicit
+              // kind: 'text' is deliberately NOT hashed — absent ≡
+              // 'text' ≡ unset, the stableStringify undefined-dropping
+              // rule), so existing docs' hashes are unchanged.
+              run.kind === 'inlineImage'
+                ? {
+                    kind: run.kind,
+                    src: run.src,
+                    width: run.width,
+                    height: run.height,
+                    alt: run.alt,
+                  }
+                : { text: run.text, style: run.style },
+            ),
           },
     )
     blockHashCache.set(block, hash)
@@ -1198,6 +1316,63 @@ function validateIndentGeometry(doc: SemanticDoc): void {
     if (left < 0) {
       throw new Error(
         `block "${block.id}": indentLeft ${block.indentLeft ?? 0} + firstLineIndent ${block.firstLineIndent ?? 0} = ${left} < 0 — the first line would start left of the content box; the adapter must validate before sending`,
+      )
+    }
+  }
+}
+
+// INLINE OBJECTS IN CODE BLOCKS (E-IMG-2, ruled in the pre-coding
+// presentation — loud seam): codeBlock runs carry source-line text
+// only; the adapter must never project an inline image into code.
+// The shared breaker would seat an object mechanically (the ORC is a
+// one-position token there too), but the CONTRACT is the seam —
+// refuse loudly, never silently lay out an object the code semantics
+// never defined. Unreachable through the public API without the
+// adapter having built the runs, so this is an adapter-contract gate.
+function validateInlineInCode(doc: SemanticDoc): void {
+  for (const block of doc.blocks) {
+    if (block.kind === 'codeBlock' && block.runs.some((run) => run.kind === 'inlineImage')) {
+      throw new Error(
+        `block "${block.id}": codeBlock runs carry an inline image — inline objects are refused in code blocks (source-line text only); the adapter must validate before sending`,
+      )
+    }
+  }
+}
+
+// FLOAT FLOW SEAM (E-IMG-3, ruled — loud, upfront, the bonds family):
+// a floated image is not in flow — it cannot bond and must not derive
+// pages. keepNext/keepPrevious ON a floated block, a bond pointing
+// INTO one (A.keepNext where B is floated; B.keepPrevious where A is
+// floated), and breakBefore/breakAfter on a floated block are all
+// adapter-contract violations: THROW, never a silent no-op. The
+// adapter expresses "float here, text continues on a new page" with
+// breakBefore on the FOLLOWING text block. null counts as UNSET at
+// every check (the PM JSON round-trip convention). keepLines/
+// widowControl on floats are NOT refused — vacuous by construction,
+// the block-image precedent.
+function validateFloatFlow(doc: SemanticDoc): void {
+  for (const block of doc.blocks) {
+    if (block.kind !== 'image' || block.float == null) continue
+    const flow = block.flow
+    if (flow?.keepNext === true || flow?.keepPrevious === true) {
+      throw new Error(
+        `block "${block.id}": floated image carries keepNext/keepPrevious — a float is not in flow and cannot bond; the adapter must validate before sending`,
+      )
+    }
+    if (flow?.breakBefore === 'page' || flow?.breakAfter === 'page') {
+      throw new Error(
+        `block "${block.id}": floated image carries breakBefore/breakAfter — a float must not derive pages; put the forced break on the following text block instead`,
+      )
+    }
+  }
+  for (let i = 0; i + 1 < doc.blocks.length; i++) {
+    const a = doc.blocks[i]
+    const b = doc.blocks[i + 1]
+    const aFloat = a.kind === 'image' && a.float != null
+    const bFloat = b.kind === 'image' && b.float != null
+    if ((aFloat || bFloat) && (a.flow?.keepNext === true || b.flow?.keepPrevious === true)) {
+      throw new Error(
+        `blocks "${a.id}" → "${b.id}": bond touches a floated image — a float is not in flow and cannot bond; the adapter must validate before sending`,
       )
     }
   }

@@ -119,12 +119,15 @@ writeFileSync(
 
 // App-side shadow copy (same content as loadable HTML) — the converter
 // lives in the shell repo's test fixtures; write both from one seed.
+// (Fixture predates the E-IMG-2 run union — every run here is a text
+// run; the cast documents the generator's own invariant.)
 const html = blocks
-  .map((b) =>
-    b.kind === 'heading'
-      ? `<h${b.level}>${b.runs[0]!.text}</h${b.level}>`
-      : `<p>${b.runs[0]!.text}</p>`,
-  )
+  .map((b) => {
+    const text = (b.runs[0] as { text: string }).text
+    return b.kind === 'heading'
+      ? `<h${b.level}>${text}</h${b.level}>`
+      : `<p>${text}</p>`
+  })
   .join('\n')
 writeFileSync(
   '/home/tristin/Projects/word-processor/src/tests/fixtures/perf-71.html',

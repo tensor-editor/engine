@@ -56,6 +56,15 @@ const FIRST_LINE_INDENTS = [40, 160]
 // this suite passing.
 const IMAGE_DIMS = [0, 1, 50, 200, 624, 700, 1248, 2600]
 const IMAGE_ALIGNS = ['left', 'center', 'right'] as const
+// E-IMG-3: occasional floats on image blocks. Negatives reach into the
+// margins (page-box clamp territory), positives toward/past the far
+// edges. DELIBERATE CORPUS CHANGE (with the E-IMG-2 inline draws
+// below): the generator now draws floats and inline-image runs, so
+// the generated sequences differ from the pre-float corpus by
+// construction — seeds stay 1001+i; parity is re-established by this
+// suite passing.
+const FLOAT_OFFSETS = [-300, -50, 0, 50, 300]
+const FLOAT_Z = ['front', 'behind'] as const
 const BASE_STYLE: TextStyle = { fontFamily: 'sans-serif', fontSize: 16 }
 const BASE_OPTS: LayoutOptions = {
   page: { width: 816, height: 1056 },
@@ -92,6 +101,19 @@ function randomBlock(rng: () => number, id: string): Block {
       height: IMAGE_DIMS[randInt(rng, 0, IMAGE_DIMS.length - 1)],
       ...(rng() < 0.6 ? { align: IMAGE_ALIGNS[randInt(rng, 0, 2)] } : {}),
       alt: `alt ${randInt(rng, 0, 99)}`,
+      // E-IMG-3: ~40% of the drawn images are FLOATED (zero flow
+      // presence; anchor + (dx, dy) → page-box clamp; z echoes to
+      // placed[]). Floats throw on bond/forced-break flow — the
+      // post-op sanitizeFloatBonds pass below keeps the corpus legal.
+      ...(rng() < 0.4
+        ? {
+            float: {
+              dx: FLOAT_OFFSETS[randInt(rng, 0, FLOAT_OFFSETS.length - 1)],
+              dy: FLOAT_OFFSETS[randInt(rng, 0, FLOAT_OFFSETS.length - 1)],
+              z: FLOAT_Z[randInt(rng, 0, 1)],
+            },
+          }
+        : {}),
       ...(flow ? { flow } : {}),
       ...(rng() < 0.3 ? { spaceBefore: SPACING[randInt(rng, 0, 2)] } : {}),
       ...(rng() < 0.3 ? { spaceAfter: SPACING[randInt(rng, 0, 2)] } : {}),
@@ -102,26 +124,42 @@ function randomBlock(rng: () => number, id: string): Block {
   }
   // 1-3 runs of random length; 0-token runs keep the empty-paragraph
   // placeholder path exercised. Occasional heading blocks exercise real
-  // heading layout.
-  const runs = Array.from({ length: randInt(rng, 1, 3) }, () => ({
-    text: 'aaaa '.repeat(randInt(rng, 0, 8)),
-    style: {
-      fontFamily: 'sans-serif',
-      fontSize: FONT_SIZES[randInt(rng, 0, 3)],
-      ...(rng() < 0.5
-        ? { lineHeight: LINE_HEIGHTS[randInt(rng, 0, 2)] }
-        : {}),
-      // M-STYLES: occasional variant-caps draws so fontVariant flows
-      // through contentHash and the parity law from day one. FakeMetrics
-      // ignores it (width = f(text)), so these blocks are geometrically
-      // identical to their variant-free twins — the hash is the only
-      // thing that distinguishes them, which is the point. NOTE: this
-      // corpus change is DELIBERATE (same fixed seeds, new draws — the
-      // generated sequences differ from the pre-fontVariant corpus by
-      // construction); parity is re-established by this suite passing.
-      ...(rng() < 0.2 ? { fontVariant: 'small-caps' } : {}),
-    },
-  }))
+  // heading layout. E-IMG-2: ~20% of runs are INLINE IMAGE OBJECTS —
+  // unbreakable single-position tokens mixed into the text runs, dims
+  // from the same menu as block images (degenerate 1×1, clamp-wide,
+  // page-tall). DELIBERATE CORPUS CHANGE: the sequences differ from the
+  // pre-inline corpus by construction; parity is re-established by this
+  // suite passing (the run draws shift every subsequent rng draw).
+  const runs = Array.from({ length: randInt(rng, 1, 3) }, () => {
+    if (rng() < 0.2) {
+      return {
+        kind: 'inlineImage' as const,
+        src: `media://inline-${randInt(rng, 0, 999)}`,
+        width: IMAGE_DIMS[randInt(rng, 0, IMAGE_DIMS.length - 1)],
+        height: IMAGE_DIMS[randInt(rng, 0, IMAGE_DIMS.length - 1)],
+        alt: `inline ${randInt(rng, 0, 99)}`,
+      }
+    }
+    return {
+      text: 'aaaa '.repeat(randInt(rng, 0, 8)),
+      style: {
+        fontFamily: 'sans-serif',
+        fontSize: FONT_SIZES[randInt(rng, 0, 3)],
+        ...(rng() < 0.5
+          ? { lineHeight: LINE_HEIGHTS[randInt(rng, 0, 2)] }
+          : {}),
+        // M-STYLES: occasional variant-caps draws so fontVariant flows
+        // through contentHash and the parity law from day one. FakeMetrics
+        // ignores it (width = f(text)), so these blocks are geometrically
+        // identical to their variant-free twins — the hash is the only
+        // thing that distinguishes them, which is the point. NOTE: this
+        // corpus change is DELIBERATE (same fixed seeds, new draws — the
+        // generated sequences differ from the pre-fontVariant corpus by
+        // construction); parity is re-established by this suite passing.
+        ...(rng() < 0.2 ? { fontVariant: 'small-caps' } : {}),
+      },
+    }
+  })
   const kind = rng() < 0.2 ? 'heading' : 'paragraph'
   return {
     id,
@@ -173,29 +211,47 @@ function applyOp(rng: () => number, state: FuzzState): { kind: OpKind; state: Fu
       const target = doc.blocks[at]
       const roll = rng()
       if (target.kind === 'image') {
-        // Image edits, four hash-relevant surfaces: src/alt are
+        // Image edits, five hash-relevant surfaces: src/alt are
         // OPAQUE ECHOES (the alt-edit op is LOAD-BEARING — placed[]
         // echoes alt, so a stale spliced echo would break parity;
         // pinned here and by tests/image.test.ts #6), dims are
-        // geometry, align is placement.
-        if (roll < 0.25) {
+        // geometry, align is placement, and (E-IMG-3) float toggling
+        // exercises the anchor/rect derivation and the dx/dy/z echo.
+        if (roll < 0.2) {
           doc.blocks[at] = { ...target, src: `${target.src}-x` }
-        } else if (roll < 0.5) {
+        } else if (roll < 0.4) {
           doc.blocks[at] = { ...target, alt: `${target.alt} (edited)` }
-        } else if (roll < 0.75) {
+        } else if (roll < 0.6) {
           doc.blocks[at] = {
             ...target,
             width: IMAGE_DIMS[randInt(rng, 0, IMAGE_DIMS.length - 1)],
             height: IMAGE_DIMS[randInt(rng, 0, IMAGE_DIMS.length - 1)],
           }
-        } else {
+        } else if (roll < 0.8) {
           doc.blocks[at] = { ...target, align: IMAGE_ALIGNS[randInt(rng, 0, 2)] }
+        } else if (target.float === undefined) {
+          doc.blocks[at] = {
+            ...target,
+            float: {
+              dx: FLOAT_OFFSETS[randInt(rng, 0, FLOAT_OFFSETS.length - 1)],
+              dy: FLOAT_OFFSETS[randInt(rng, 0, FLOAT_OFFSETS.length - 1)],
+              z: FLOAT_Z[randInt(rng, 0, 1)],
+            },
+          }
+        } else {
+          // Clear the float (undefined ≡ absent for the hash — the
+          // stableStringify undefined-dropping rule).
+          doc.blocks[at] = { ...target, float: undefined }
         }
       } else if (roll < 0.33) {
-        // hash-only: same length, same heights, different content
+        // hash-only: same length, same heights, different content.
+        // E-IMG-2: inline-image runs carry no text — the edit skips
+        // them (the segment/token surfaces cover their cache paths).
         doc.blocks[at] = {
           ...target,
-          runs: target.runs.map((r) => ({ ...r, text: r.text.replace(/a/g, 'c') })),
+          runs: target.runs.map((r) =>
+            r.kind === 'inlineImage' ? r : { ...r, text: r.text.replace(/a/g, 'c') },
+          ),
         }
       } else if (roll < 0.66) {
         // height-changing: entirely new random content, same id
@@ -219,17 +275,93 @@ function applyOp(rng: () => number, state: FuzzState): { kind: OpKind; state: Fu
       break
     }
   }
+  // FLOAT-BOND SANITIZE (E-IMG-3): the engine's float flow seam THROWS
+  // on any bond or forced break touching a floated image (ruled loud
+  // seam, see tests/float.test.ts #e). The generator draws flow and
+  // float independently, so an op can produce an illegal combo (a
+  // random flow menu pick on a floated image, a swap moving a bonded
+  // block next to one). Rather than narrow the generator's menus, this
+  // post-op pass clears the offending flags — copy-on-write, because
+  // blocks are immutable by contract and mutating one in place would
+  // betray the identity hash cache. DELIBERATE corpus shaping: bonds
+  // among text/block-image blocks still fuzz at full strength; the
+  // float seam itself is pinned by the dedicated tests.
+  doc.blocks = sanitizeFloatBonds(doc.blocks)
   return { kind, state: { doc, opts, nextId: state.nextId } }
 }
 
+// True when the block is a floated image (E-IMG-3).
+const isFloated = (block: Block): boolean =>
+  block.kind === 'image' && block.float !== undefined
+
+// Strip the float-illegal flow keys (bonds + forced breaks); keep the
+// vacuous-legal ones (keepLines/widowControl, the block-image
+// precedent). Returns undefined when nothing legal remains.
+function stripFloatIllegalFlow(flow: FlowPolicy | undefined): FlowPolicy | undefined {
+  if (flow === undefined) return undefined
+  const kept: FlowPolicy = { ...flow }
+  delete kept.keepNext
+  delete kept.keepPrevious
+  delete kept.breakBefore
+  delete kept.breakAfter
+  return kept.keepLines !== undefined || kept.widowControl !== undefined ? kept : undefined
+}
+
+function stripFlowKeys(flow: FlowPolicy | undefined, keys: ('keepNext' | 'keepPrevious')[]): FlowPolicy | undefined {
+  if (flow === undefined) return undefined
+  const kept: FlowPolicy = { ...flow }
+  for (const key of keys) delete kept[key]
+  const rest = Object.keys(kept).filter((key) => kept[key as keyof FlowPolicy] !== undefined)
+  return rest.length > 0 ? kept : undefined
+}
+
+function sanitizeFloatBonds(blocks: Block[]): Block[] {
+  let out = blocks
+  const setBlock = (i: number, block: Block): void => {
+    if (out === blocks) out = [...blocks]
+    out[i] = block
+  }
+  for (let i = 0; i < out.length; i++) {
+    const a = out[i]
+    const b = out[i + 1]
+    const aFloat = isFloated(a)
+    const bFloat = b !== undefined && isFloated(b)
+    // A floated block's own bond/forced-break flags: strip.
+    if (aFloat) setBlock(i, { ...a, flow: stripFloatIllegalFlow(a.flow) })
+    if (bFloat) setBlock(i + 1, { ...b!, flow: stripFloatIllegalFlow(b!.flow) })
+    // A bond between an adjacent pair where either side is floated:
+    // strip the flag from whichever side carries it.
+    if ((aFloat || bFloat) && b !== undefined) {
+      if (a.flow?.keepNext === true) {
+        setBlock(i, { ...out[i], flow: stripFlowKeys(out[i].flow, ['keepNext']) })
+      }
+      if (b.flow?.keepPrevious === true) {
+        setBlock(i + 1, { ...out[i + 1], flow: stripFlowKeys(out[i + 1].flow, ['keepPrevious']) })
+      }
+    }
+  }
+  return out
+}
+
 // placed[] compared too (E-IMG-1): atomic visual placements are part
-// of the parity surface.
+// of the parity surface. E-IMG-2/3: inline-object segments (inside
+// lines, one position per object) and float rects (the float/z echoes
+// included) ride the same canonicalization — warm ≡ cold covers the
+// full E-IMG-2/3 output shapes.
 const canonical = (r: LayoutResult) =>
   JSON.parse(JSON.stringify({ pages: r.pages, lines: r.lines, breaks: r.breaks, placed: r.placed }))
 
 const SEQUENCE_COUNT = 40
 const OPS_PER_SEQUENCE = 15
 const BASE_SEED = 1001 // fixed forever
+
+// CORPUS COVERAGE RECEIPT (E-IMG-2/3): the generator's inline-image
+// and float menus must actually FIRE — a silently-narrowed menu would
+// pass parity while exercising neither surface. Counted across every
+// op of every sequence (the its below run sequentially in declaration
+// order); the closing it asserts both surfaces were exercised.
+let corpusInlineRuns = 0
+let corpusFloats = 0
 
 describe('parity fuzz: warm engine deep-equals cold engine (parity law)', () => {
   for (let s = 0; s < SEQUENCE_COUNT; s++) {
@@ -256,6 +388,14 @@ describe('parity fuzz: warm engine deep-equals cold engine (parity law)', () => 
         state.doc = applied.state.doc
         state.opts = applied.state.opts
         state.nextId = applied.state.nextId
+
+        for (const block of state.doc.blocks) {
+          if (block.kind === 'image') {
+            if (block.float !== undefined) corpusFloats += 1
+          } else {
+            corpusInlineRuns += block.runs.filter((r) => r.kind === 'inlineImage').length
+          }
+        }
 
         const warmResult = warm.layout(state.doc, state.opts)
         const coldResult = createLayoutEngine({ metrics: FakeMetrics }).layout(state.doc, state.opts)
@@ -302,4 +442,9 @@ describe('parity fuzz: warm engine deep-equals cold engine (parity law)', () => 
       }
     })
   }
+
+  it('corpus coverage receipt: inline-image runs and floats both exercised', () => {
+    expect(corpusInlineRuns).toBeGreaterThan(0)
+    expect(corpusFloats).toBeGreaterThan(0)
+  })
 })

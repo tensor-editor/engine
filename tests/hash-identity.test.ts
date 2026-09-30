@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createLayoutEngine, type Block, type HeadingBlock, type ParagraphBlock, type SemanticDoc, type LayoutOptions } from '../src/index.js'
+import { createLayoutEngine, type Block, type HeadingBlock, type ParagraphBlock, type SemanticDoc, type LayoutOptions, type TextRun } from '../src/index.js'
 import { resetHashCallCount, hashCallCount } from '../src/layout.js'
 import { FakeMetrics } from './fake-metrics.js'
 
@@ -100,7 +100,12 @@ describe('perf-71 mid-document edit (fixture pin)', () => {
       i === MID
         ? {
             ...b,
-            runs: [{ text: (b.runs[0]!.text + ' tensor'), style: b.runs[0]!.style }],
+            // Fixture predates the E-IMG-2 run union — its runs are all
+            // text; the cast documents the fixture's own invariant.
+            runs: (() => {
+              const first = b.runs[0] as TextRun
+              return [{ text: first.text + ' tensor', style: first.style }]
+            })(),
           }
         : b,
     )

@@ -40,10 +40,47 @@ export interface TextStyle {
   fontVariant?: 'small-caps' | 'normal'
 }
 
-export interface Run {
+/**
+ * The Run union's text arm (E-IMG-2). `kind` is OPTIONAL and absent ≡
+ * 'text' — existing documents, fixtures, and adapter outputs stay
+ * valid as-is (ruled in the E-IMG-2/3 session); every run consumer
+ * dispatches on `run.kind === 'inlineImage'` and treats everything
+ * else as text.
+ */
+export interface TextRun {
+  kind?: 'text'
   text: string
   style: TextStyle
 }
+
+/**
+ * INLINE IMAGE OBJECT (E-IMG-2) — the Run union's object arm. An
+ * UNBREAKABLE token in the breaker: exactly ONE position in the
+ * block's concatenated text (an object-replacement token — never a
+ * space, so never a break point; length 1, so never split), seated
+ * BOTTOM-AT-BASELINE (CSS default seating: it extends imageHeight
+ * above the baseline, nothing below). src is OPAQUE —
+ * 'media://<sha256>' in Tensor; the engine never resolves or loads
+ * it, and LayoutResult never echoes run data: paint data is the
+ * SHELL's to resolve via the segment contract (see segmentsFor in
+ * line-breaker.ts). width/height are REQUIRED DOCUMENT DATA — dims
+ * are data (the M5.6+ ruling): the metrics port is never consulted
+ * for objects; the breaker clamps an over-wide object to the base
+ * wrap width via the shared fit-down primitive, aspect preserved.
+ * All fields ride contentHash by construction (hashBlock names them).
+ */
+export interface InlineImageRun {
+  kind: 'inlineImage'
+  /** OPAQUE — never resolved or loaded by the engine. */
+  src: string
+  /** Intrinsic px, REQUIRED document data, never fetched at layout time. */
+  width: number
+  height: number
+  /** OPAQUE a11y metadata — hash-covered uniformly (conservative). */
+  alt: string
+}
+
+export type Run = TextRun | InlineImageRun
 
 /**
  * Port only. The real (canvas-based) implementation lives in the shell
@@ -234,6 +271,22 @@ export interface ImageBlock extends BlockBase {
   align?: 'left' | 'center' | 'right'
   /** OPAQUE echo — a11y metadata, never rendered by the engine. */
   alt: string
+  /**
+   * ANCHORED FLOAT (E-IMG-3, v1 wrap NONE). When present the block
+   * contributes ZERO height to the flow — text lays out as if the
+   * block isn't there; the walk records the ANCHOR (the flow position
+   * where the block would have started) and the placed rect = anchor +
+   * (dx, dy), clamped to the FULL PAGE BOX (margins included — the
+   * page is the canvas; a float may sit IN the margin). z is PAINT
+   * ORDER, not layout. LOUD SEAM: bonds and forced breaks on a floated
+   * block THROW at layout() entry (validateFloatFlow) — a float is not
+   * in flow and must not derive pages; put a forced break on the
+   * following text block instead. contentHash covers float: the
+   * placed rect and z echo into placed[] (cache-relevance, the E-IMG-1
+   * alt ruling family). Like FlowPolicy, PM attribute JSON round-trips
+   * use null for absent attrs: null counts as UNSET at every use site.
+   */
+  float?: { dx: number; dy: number; z: 'front' | 'behind' } | null
 }
 
 export interface SemanticDoc {
@@ -333,12 +386,16 @@ export interface LastStats {
 /**
  * One ATOMIC VISUAL block's placement — images now; horizontalRule may
  * migrate to this array later (do not assume kind is only 'image').
- * Field set designed so FLOATS (a future session) extend it additively
- * with z. Order discipline: placed[] follows DOCUMENT order, exactly
- * like lines[] — a sibling array, never interleaved with it; consumers
- * merge the two by (pageIndex, rect.y). Images never appear in lines[].
- * Edit survival: echoes (src, alt) are the adapter's stable strings;
- * the rect is recomputed every layout (positional, like LineBox.rect).
+ * Field set designed so FLOATS (E-IMG-3) extend it additively — they
+ * do, via the optional float/z fields below; nothing existing changed
+ * shape (absent optionals are omitted by serialization — golden
+ * snapshots are pinned on it). Order discipline: placed[] follows
+ * DOCUMENT order, exactly like lines[] — floats interleaved with
+ * block images at their block positions — a sibling array, never
+ * interleaved with lines[]; consumers merge the two by (pageIndex,
+ * rect.y). Images never appear in lines[]. Edit survival: echoes (src,
+ * alt) are the adapter's stable strings; the rect is recomputed every
+ * layout (positional, like LineBox.rect).
  */
 export interface PlacedRect {
   /** Edit survival: author-assigned, stable across edits by contract. */
@@ -349,8 +406,26 @@ export interface PlacedRect {
   /** OPAQUE echo of ImageBlock.alt — cache-relevant: it rides contentHash. */
   alt: string
   pageIndex: number
-  /** Relative to the page content box — same frame as LineBox.rect. */
+  /**
+   * Relative to the page content box — same frame as LineBox.rect —
+   * for FLOATS too (single frame for the whole array): a float may sit
+   * IN the margin, so a floated rect can carry NEGATIVE x/y (or x
+   * beyond the content width); the clamp that put it there ran in PAGE
+   * coordinates.
+   */
   rect: Rect
+  /**
+   * Present iff this rect was FLOATED (E-IMG-3): echo of the float
+   * spec's dx/dy. Cache-relevant — rides contentHash (an edit must
+   * re-walk, never serve a stale spliced echo).
+   */
+  float?: { dx: number; dy: number }
+  /**
+   * PAINT ORDER, not layout (E-IMG-3): present iff floated — 'behind'
+   * paints under the text, 'front' over it. The engine's geometry is
+   * byte-identical for either value; only this echo differs.
+   */
+  z?: 'front' | 'behind'
 }
 
 /**
@@ -364,9 +439,10 @@ export interface LayoutResult {
   lines: LineBox[]
   breaks: FragmentBreak[]
   /**
-   * Document order. One entry per atomic visual block (images now);
-   * floats will extend this array additively. Sibling of lines[] —
-   * consumers merge by (pageIndex, rect.y).
+   * Document order. One entry per atomic visual block (images) —
+   * block images and FLOATS (E-IMG-3) alike, interleaved at their
+   * block positions; floats carry their float/z echoes. Sibling of
+   * lines[] — consumers merge by (pageIndex, rect.y).
    */
   placed: PlacedRect[]
   /**
