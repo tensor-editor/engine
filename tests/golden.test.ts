@@ -100,3 +100,103 @@ describe('golden: bonded heading flagship (FakeMetrics)', () => {
     expect(round(result)).toMatchSnapshot()
   })
 })
+
+describe('golden: natural-size image + walk flow (FakeMetrics)', () => {
+  it('places the intrinsic rect and continues the walk below it', () => {
+    // E-IMG-1 spec-of-record pin: the PlacedRect record shape at
+    // natural size. 200×100 fits the 624×864 box → placed as-is.
+    const doc: SemanticDoc = {
+      baseStyle: { fontFamily: 'sans-serif', fontSize: 16 },
+      blocks: [
+        {
+          id: 'img',
+          kind: 'image',
+          src: 'media://e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+          width: 200,
+          height: 100,
+          alt: 'A small photograph',
+        },
+        {
+          id: 'tail',
+          kind: 'paragraph',
+          runs: [{ text: 'After the image.', style: { fontFamily: 'sans-serif', fontSize: 16 } }],
+        },
+      ],
+    }
+
+    const { layout } = createLayoutEngine({ metrics: FakeMetrics })
+    const result = layout(doc, opts)
+    expect(round(result)).toMatchSnapshot()
+  })
+})
+
+describe('golden: fit-down landscape image (FakeMetrics)', () => {
+  it('scales to contentWidth preserving aspect; the following block accounts for the scaled height', () => {
+    // 1248×300 → scale 0.5 → 624×150: the two numbers every future
+    // consumer relies on (placed width == contentWidth, height scaled).
+    const doc: SemanticDoc = {
+      baseStyle: { fontFamily: 'sans-serif', fontSize: 16 },
+      blocks: [
+        {
+          id: 'img',
+          kind: 'image',
+          src: 'media://abc123',
+          width: 1248,
+          height: 300,
+          alt: 'A wide landscape',
+        },
+        {
+          id: 'tail',
+          kind: 'paragraph',
+          runs: [{ text: 'After the wide image.', style: { fontFamily: 'sans-serif', fontSize: 16 } }],
+        },
+      ],
+    }
+
+    const { layout } = createLayoutEngine({ metrics: FakeMetrics })
+    const result = layout(doc, opts)
+    expect(round(result)).toMatchSnapshot()
+  })
+})
+
+describe('golden: image keepNext caption bond (FakeMetrics)', () => {
+  it('7/1/1: filler fills page 0, the bonded image moves fresh, the caption follows', () => {
+    // Filler: 7 lines × 110px = 770. The image (90×90) fits at
+    // 770..860, but the caption's first line (17.6) does not → the
+    // keepNext bond moves the image fresh to page 1 and the caption
+    // follows. Pins the kind-agnostic bond-helper path: the image's
+    // "line" is its placed rect.
+    const doc: SemanticDoc = {
+      baseStyle: { fontFamily: 'sans-serif', fontSize: 16 },
+      blocks: [
+        {
+          id: 'filler',
+          kind: 'paragraph',
+          runs: [
+            { text: 'aaaa '.repeat(84), style: { fontFamily: 'sans-serif', fontSize: 100 } },
+          ],
+        },
+        {
+          id: 'img',
+          kind: 'image',
+          src: 'media://bonded',
+          width: 90,
+          height: 90,
+          alt: 'A bonded figure',
+          flow: { keepNext: true },
+        },
+        {
+          id: 'caption',
+          kind: 'paragraph',
+          runs: [
+            { text: 'Figure 1.', style: { fontFamily: 'sans-serif', fontSize: 16 } },
+          ],
+        },
+      ],
+    }
+
+    const { layout } = createLayoutEngine({ metrics: FakeMetrics })
+    const result = layout(doc, opts)
+    expect(round(result)).toMatchSnapshot()
+  })
+})

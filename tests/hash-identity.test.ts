@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createLayoutEngine, type Block, type SemanticDoc, type LayoutOptions } from '../src/index.js'
+import { createLayoutEngine, type Block, type HeadingBlock, type ParagraphBlock, type SemanticDoc, type LayoutOptions } from '../src/index.js'
 import { resetHashCallCount, hashCallCount } from '../src/layout.js'
 import { FakeMetrics } from './fake-metrics.js'
 
@@ -24,7 +24,9 @@ const raw = JSON.parse(
   readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'perf-71.json'), 'utf8'),
 ) as SemanticDoc
 const BASE_STYLE = raw.baseStyle
-const PERF71_BLOCKS = raw.blocks
+// Text blocks only (the fixture predates image blocks) — typed so
+// .runs reads type-check under the widened Block union.
+const PERF71_BLOCKS = raw.blocks as (ParagraphBlock | HeadingBlock)[]
 
 function freshDoc(blocks: Block[]): SemanticDoc {
   return { blocks, baseStyle: BASE_STYLE }

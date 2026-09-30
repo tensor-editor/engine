@@ -47,6 +47,15 @@ const INDENT_RIGHTS = [30, 150]
 // cannot guarantee the pairwise sum ≥ 0. The hanging case (negative
 // under a larger indentLeft) is pinned by explicit tests instead.
 const FIRST_LINE_INDENTS = [40, 160]
+// E-IMG-1: occasional image blocks. Dim menu INCLUDES zero (the
+// degenerate 1×1 degrade), sub-pixel, and larger-than-content-box
+// (700/1248 > 624 width; 2600 > 864 height — fit-down and R6 floor
+// territory). DELIBERATE CORPUS CHANGE: the generator now draws
+// images, so the generated sequences differ from the pre-image corpus
+// by construction — seeds stay 1001+i; parity is re-established by
+// this suite passing.
+const IMAGE_DIMS = [0, 1, 50, 200, 624, 700, 1248, 2600]
+const IMAGE_ALIGNS = ['left', 'center', 'right'] as const
 const BASE_STYLE: TextStyle = { fontFamily: 'sans-serif', fontSize: 16 }
 const BASE_OPTS: LayoutOptions = {
   page: { width: 816, height: 1056 },
@@ -69,6 +78,28 @@ const FLOW_MENU: (FlowPolicy | undefined)[] = [
 ]
 
 function randomBlock(rng: () => number, id: string): Block {
+  const flow = FLOW_MENU[Math.floor(rng() * FLOW_MENU.length)]
+  // E-IMG-1: ~15% of blocks are images (atomic placements; the flow
+  // menu rides them like any block — bonds on/from images, forced
+  // breaks, keepLines vacuous-but-harmless). Indents are drawn for
+  // images too: ignored at placement, still hash-covered.
+  if (rng() < 0.15) {
+    return {
+      id,
+      kind: 'image',
+      src: `media://${id}-${randInt(rng, 0, 999)}`,
+      width: IMAGE_DIMS[randInt(rng, 0, IMAGE_DIMS.length - 1)],
+      height: IMAGE_DIMS[randInt(rng, 0, IMAGE_DIMS.length - 1)],
+      ...(rng() < 0.6 ? { align: IMAGE_ALIGNS[randInt(rng, 0, 2)] } : {}),
+      alt: `alt ${randInt(rng, 0, 99)}`,
+      ...(flow ? { flow } : {}),
+      ...(rng() < 0.3 ? { spaceBefore: SPACING[randInt(rng, 0, 2)] } : {}),
+      ...(rng() < 0.3 ? { spaceAfter: SPACING[randInt(rng, 0, 2)] } : {}),
+      ...(rng() < 0.25 ? { indentLeft: INDENTS[randInt(rng, 0, 2)] } : {}),
+      ...(rng() < 0.25 ? { indentRight: INDENT_RIGHTS[randInt(rng, 0, 1)] } : {}),
+      ...(rng() < 0.2 ? { firstLineIndent: FIRST_LINE_INDENTS[randInt(rng, 0, 1)] } : {}),
+    } as Block
+  }
   // 1-3 runs of random length; 0-token runs keep the empty-paragraph
   // placeholder path exercised. Occasional heading blocks exercise real
   // heading layout.
@@ -92,7 +123,6 @@ function randomBlock(rng: () => number, id: string): Block {
     },
   }))
   const kind = rng() < 0.2 ? 'heading' : 'paragraph'
-  const flow = FLOW_MENU[Math.floor(rng() * FLOW_MENU.length)]
   return {
     id,
     kind,
@@ -142,7 +172,26 @@ function applyOp(rng: () => number, state: FuzzState): { kind: OpKind; state: Fu
       const at = randInt(rng, 0, doc.blocks.length - 1)
       const target = doc.blocks[at]
       const roll = rng()
-      if (roll < 0.33) {
+      if (target.kind === 'image') {
+        // Image edits, four hash-relevant surfaces: src/alt are
+        // OPAQUE ECHOES (the alt-edit op is LOAD-BEARING — placed[]
+        // echoes alt, so a stale spliced echo would break parity;
+        // pinned here and by tests/image.test.ts #6), dims are
+        // geometry, align is placement.
+        if (roll < 0.25) {
+          doc.blocks[at] = { ...target, src: `${target.src}-x` }
+        } else if (roll < 0.5) {
+          doc.blocks[at] = { ...target, alt: `${target.alt} (edited)` }
+        } else if (roll < 0.75) {
+          doc.blocks[at] = {
+            ...target,
+            width: IMAGE_DIMS[randInt(rng, 0, IMAGE_DIMS.length - 1)],
+            height: IMAGE_DIMS[randInt(rng, 0, IMAGE_DIMS.length - 1)],
+          }
+        } else {
+          doc.blocks[at] = { ...target, align: IMAGE_ALIGNS[randInt(rng, 0, 2)] }
+        }
+      } else if (roll < 0.33) {
         // hash-only: same length, same heights, different content
         doc.blocks[at] = {
           ...target,
@@ -173,8 +222,10 @@ function applyOp(rng: () => number, state: FuzzState): { kind: OpKind; state: Fu
   return { kind, state: { doc, opts, nextId: state.nextId } }
 }
 
+// placed[] compared too (E-IMG-1): atomic visual placements are part
+// of the parity surface.
 const canonical = (r: LayoutResult) =>
-  JSON.parse(JSON.stringify({ pages: r.pages, lines: r.lines, breaks: r.breaks }))
+  JSON.parse(JSON.stringify({ pages: r.pages, lines: r.lines, breaks: r.breaks, placed: r.placed }))
 
 const SEQUENCE_COUNT = 40
 const OPS_PER_SEQUENCE = 15
@@ -221,6 +272,10 @@ describe('parity fuzz: warm engine deep-equals cold engine (parity law)', () => 
         }
         if (warmResult.breaks.length > 0) {
           expect(Object.isFrozen(warmResult.breaks[0])).toBe(true)
+        }
+        if (warmResult.placed.length > 0) {
+          expect(Object.isFrozen(warmResult.placed[0])).toBe(true)
+          expect(Object.isFrozen(warmResult.placed[0].rect)).toBe(true)
         }
         expect(Object.isFrozen(warmResult.pages[0])).toBe(true)
 

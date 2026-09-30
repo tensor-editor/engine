@@ -6,6 +6,7 @@ import type {
   LineBox,
   LineResult,
   PageGeometry,
+  PlacedRect,
   Rect,
   SemanticDoc,
   TextMetrics,
@@ -173,6 +174,12 @@ interface WalkCacheEntry {
   entryState: WalkState
   lineBoxes: LineBox[]
   breaks: FragmentBreak[]
+  /**
+   * Atomic visual outputs (images) — the sibling of lineBoxes for
+   * blocks that never enter lines[]. Splice/prefix reuse shares these
+   * frozen records zero-copy, exactly like lineBoxes.
+   */
+  placedRects: PlacedRect[]
   exitState: WalkState
   /**
    * UPSTREAM-DEPENDENCE RECORD: whether this placement consumed its
@@ -185,6 +192,22 @@ interface WalkCacheEntry {
    * cached record.
    */
   bonded: boolean
+  /**
+   * NON-MARKOV RECORD: this placement was committed while its own
+   * bond enforcement was dropped on a SPENT attempt — the
+   * backward-cascade unwind re-walked this block within the same
+   * call and the one-attempt budget was already gone. That outcome
+   * depends on CALL HISTORY, not on (entry state, block, opts) alone
+   * — a fresh call from the same entry state would enforce with a
+   * fresh attempt (shape-1 move) instead of dropping. Such an entry
+   * may NEVER be prefix-reused or spliced: the resume comparison and
+   * the splice gate both refuse it, forcing a re-walk that
+   * reproduces the placement under a fresh attempt. Caught by the
+   * parity fuzzer (seed 1023 — an image successor's tall first
+   * "line" made the violation reachable; the mechanism is
+   * kind-agnostic and predates images).
+   */
+  danced: boolean
 }
 
 // Line-level cache: a block's LineResults depend only on (runs, the
@@ -273,11 +296,17 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
 
       const oldCache = walkCache
 
-      // Resume = first index where [id, contentHash] differs. Length
-      // mismatch counts as a difference at the shorter length's end.
+      // Resume = first index where [id, contentHash] differs — or the
+      // first NON-MARKOV entry (a spent-attempt bond drop is
+      // call-history-dependent and must be re-walked, never reused).
+      // Length mismatch counts as a difference at the shorter length's end.
       let resume = Math.min(doc.blocks.length, oldCache.length)
       for (let i = 0; i < resume; i++) {
-        if (doc.blocks[i].id !== oldCache[i].blockId || hashes[i] !== oldCache[i].contentHash) {
+        if (
+          doc.blocks[i].id !== oldCache[i].blockId ||
+          hashes[i] !== oldCache[i].contentHash ||
+          oldCache[i].danced
+        ) {
           resume = i
           break
         }
@@ -301,6 +330,10 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
 
       const lines: LineBox[] = []
       const breaks: FragmentBreak[] = []
+      // ATOMIC VISUAL OUTPUT: images (and, additively, floats later).
+      // Document order, the sibling of lines[] — images never appear
+      // in lines[]; consumers merge the arrays by (pageIndex, rect.y).
+      const placedOut: PlacedRect[] = []
       const newCache: WalkCacheEntry[] = []
 
       // Lemma 1: unchanged blocks + identical entry states ⇒ identical
@@ -308,6 +341,7 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
       for (let i = 0; i < resume; i++) {
         lines.push(...oldCache[i].lineBoxes)
         breaks.push(...oldCache[i].breaks)
+        placedOut.push(...oldCache[i].placedRects)
         newCache.push(oldCache[i])
       }
 
@@ -326,6 +360,24 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
 
       const getLines = (index: number): LineResult[] => {
         const block = doc.blocks[index]
+        // ATOMIC IMAGES (E-IMG-1): the image's single synthetic "line"
+        // — INTERNAL, never emitted into lines[]. Feeding it through
+        // the SAME machinery (countFitting, firstLineLands, fitsFresh)
+        // means one derivation of the fit/bond rules, not a parallel
+        // image copy of them. Not cached and never counted in
+        // linesRebroken: an image never breaks lines, and its dims are
+        // per-call arithmetic over (intrinsic × contentBox).
+        if (block.kind === 'image') {
+          const dims = imagePlacedSize(
+            block.width,
+            block.height,
+            contentBox.width,
+            contentBox.height,
+          )
+          return [
+            { start: 0, end: 0, segments: [], width: dims.width, height: dims.height, baseline: dims.height },
+          ]
+        }
         // INDENT FAMILY, effect 1 (line breaking): base lines wrap at
         // contentBox.width − indentLeft − indentRight; ONLY line 0
         // wraps at contentBox.width − (indentLeft + firstLineIndent) −
@@ -378,10 +430,12 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
           const popped = newCache.pop()!
           lines.length -= popped.lineBoxes.length
           breaks.length -= popped.breaks.length
+          placedOut.length -= popped.placedRects.length
         }
         newCache.push(entry)
         lines.push(...entry.lineBoxes)
         breaks.push(...entry.breaks)
+        placedOut.push(...entry.placedRects)
       }
 
       let state: WalkState = startState
@@ -414,9 +468,19 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
 
         let currentEntry = entryState
         let placed = placeBlock(
-          block, results, currentEntry, contentBox.height, control, bonded, false,
+          block, results, currentEntry, contentBox.width, contentBox.height,
+          control, bonded, false,
         )
         let movedViaShape1 = false
+
+        // BOND-DROP HISTORY FLAG: a placement committed while its own
+        // bond enforcement was dropped on a SPENT attempt is a
+        // call-history-dependent outcome (see WalkCacheEntry.danced)
+        // — the one non-Markov flavor the walk produces. Everything
+        // else (shape-1/shape-2 moves, vacuous drops, still-violated
+        // stays) is a pure function of (entry state, block, opts) and
+        // replays identically in a fresh call.
+        let danced = false
 
         if (structural) {
           // STRUCTURAL DROP (loud): breakBefore(B) or breakAfter(A) —
@@ -431,9 +495,10 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
           // height via firstLineLands, the exact same rules the walk
           // applies (see its comment for the full arm list).
           const nextLines = getLines(i + 1)
-          if (
-            !firstLineLands(next, nextLines, placed.exitState, contentBox.height, controlOf(next))
-          ) {
+          const lands = firstLineLands(
+            next, nextLines, placed.exitState, contentBox.height, controlOf(next),
+          )
+          if (!lands) {
             if (!bondAttempts.has(i)) {
               bondAttempts.add(i)
               const fitsFresh =
@@ -442,7 +507,8 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
                 // SHAPE 1 (R1 shape): move A's start to the fresh page.
                 currentEntry = { pageIndex: entryState.pageIndex + 1, y: 0 }
                 placed = placeBlock(
-                  block, results, currentEntry, contentBox.height, control, bonded, false,
+                  block, results, currentEntry, contentBox.width, contentBox.height,
+                  control, bonded, false,
                 )
                 movedViaShape1 = true
                 // Still violated → bounded drop. A stays at the moved
@@ -453,17 +519,29 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
                 // point up one line; A's last line joins B's page.
                 // Floor: a single-line final fragment cannot back up
                 // (placeBlock places it naturally) → bounded drop.
+                // For an ATOMIC image A this shape is vacuous by
+                // construction (n == 1, never splits) → bounded drop.
                 placed = placeBlock(
-                  block, results, currentEntry, contentBox.height, control, bonded, true,
+                  block, results, currentEntry, contentBox.width, contentBox.height,
+                  control, bonded, true,
                 )
               }
               // else: fitsFresh && entryState.y === 0 → VACUOUS
               // (impossible-after-move family): A already starts a
               // fresh page; moving re-creates the same situation
               // forever → the bond drops.
+            } else {
+              // SPENT-ATTEMPT DROP — the only history-dependent
+              // outcome: the backward-cascade unwind re-walked this
+              // block within the same call and the one-attempt
+              // budget was gone. Flag the entry (never prefix-reused,
+              // never spliced — a fresh call from the same entry
+              // state would enforce with a fresh attempt instead).
+              danced = true
             }
-            // else: the attempt was already used this call → bounded
-            // drop (pinned by the composed R2-re-fire flow test).
+            // else: the attempt was already used this call → the
+            // spent-attempt drop above (pinned by the composed
+            // R2-re-fire flow test).
           }
         }
 
@@ -473,8 +551,10 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
           entryState: currentEntry,
           lineBoxes: placed.lineBoxes,
           breaks: placed.breaks,
+          placedRects: placed.placedRects,
           exitState: placed.exitState,
           bonded,
+          danced,
         })
         if (!walked.has(i)) {
           walked.add(i)
@@ -504,8 +584,7 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
             block.flow?.breakBefore !== 'page'
           if (
             prevBondActive &&
-            placed.lineBoxes[0].pageIndex !==
-              prevEntry.lineBoxes[prevEntry.lineBoxes.length - 1].pageIndex
+            firstPageOfOutputs(placed) !== lastPageOfEntry(prevEntry)
           ) {
             // bond (i-1 → i) violated → predecessor enforcement (one
             // attempt, keyed i-1).
@@ -531,6 +610,7 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
                   prev,
                   prevResults,
                   prevEntryState,
+                  contentBox.width,
                   contentBox.height,
                   controlOf(prev),
                   true,
@@ -542,8 +622,15 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
                   entryState: prevEntryState,
                   lineBoxes: prevPlaced.lineBoxes,
                   breaks: prevPlaced.breaks,
+                  placedRects: prevPlaced.placedRects,
                   exitState: prevPlaced.exitState,
                   bonded: true, // this re-placement consumed block i's height
+                  // Not danced: this shape-2 re-placement is part of a
+                  // deterministic, fully replayable dance (the fresh
+                  // call re-executes the same sequence with the same
+                  // fresh attempts); only the spent-attempt drop is
+                  // history-dependent.
+                  danced: false,
                 })
                 state = prevPlaced.exitState
                 continue // the loop re-places block i from the new state
@@ -557,15 +644,17 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
         }
 
         // SPLICE GATE. Consume cached entries while (entry state AND
-        // id AND contentHash) verify. PROOF-PINNING: exact === on the
-        // state floats is sound ONLY because warm and cold walks
-        // execute the identical operation sequence (same y-cursor
-        // additions, same order, same values); IEEE guarantees
-        // bitwise-identical results. A refactor that reorders
-        // accumulation breaks this proof silently — the parity fuzzer
-        // is the tripwire. A gate FAILING on reordered accumulation is
-        // merely a missed splice (safe); a gate passing on unequal
-        // states is impossible under ===.
+        // id AND contentHash AND not-danced) verify. PROOF-PINNING:
+        // exact === on the state floats is sound ONLY because warm
+        // and cold walks execute the identical operation sequence
+        // (same y-cursor additions, same order, same values); IEEE
+        // guarantees bitwise-identical results. A refactor that
+        // reorders accumulation breaks this proof silently — the
+        // parity fuzzer is the tripwire. A gate FAILING on reordered
+        // accumulation is merely a missed splice (safe); a gate
+        // passing on unequal states is impossible under ===. The
+        // `danced` refusal is the same discipline for the one
+        // history-dependent placement flavor (see WalkCacheEntry).
         const preSpliceState = state
         let j = i + 1
         while (
@@ -573,10 +662,12 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
           j < oldCache.length &&
           sameState(state, oldCache[j].entryState) &&
           doc.blocks[j].id === oldCache[j].blockId &&
-          hashes[j] === oldCache[j].contentHash
+          hashes[j] === oldCache[j].contentHash &&
+          !oldCache[j].danced
         ) {
           lines.push(...oldCache[j].lineBoxes)
           breaks.push(...oldCache[j].breaks)
+          placedOut.push(...oldCache[j].placedRects)
           newCache.push(oldCache[j])
           // CURSOR RECONSTRUCTION: the cached exitState is the MACHINE
           // exit — a breakAfter close is a cursor transform applied by
@@ -606,6 +697,7 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
           const popped = newCache.pop()!
           lines.length -= popped.lineBoxes.length
           breaks.length -= popped.breaks.length
+          placedOut.length -= popped.placedRects.length
           stats.blocksSpliced -= 1
           j -= 1
         }
@@ -624,12 +716,14 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
 
       walkCache = newCache
 
-      // Pages derived: every opened page holds >= 1 line (slicer
-      // invariant), so this equals the closePage count exactly.
+      // Pages derived: every opened page holds >= 1 line OR >= 1
+      // placed rect (slicer invariant; an image-only page must
+      // materialize — a trailing image would otherwise vanish).
       // Empty doc → 1 page.
       let maxPage = 0
       for (const line of lines) if (line.pageIndex > maxPage) maxPage = line.pageIndex
       for (const brk of breaks) if (brk.pageIndex > maxPage) maxPage = brk.pageIndex
+      for (const rect of placedOut) if (rect.pageIndex > maxPage) maxPage = rect.pageIndex
       const pages: PageGeometry[] = []
       for (let p = 0; p <= maxPage; p++) {
         pages.push(Object.freeze({ index: p, size, contentBox }))
@@ -643,13 +737,73 @@ export function createLayoutEngine({ metrics }: { metrics: TextMetrics }): Layou
       hadCall = true
 
       currentStats = Object.freeze(stats)
-      return { pages, lines, breaks, version }
+      return { pages, lines, breaks, placed: placedOut, version }
     },
 
     get lastStats(): LastStats {
       return currentStats
     },
   }
+}
+
+/**
+ * THE ONE horizontal-align derivation (M5.13): the x-offset of an
+ * aligned rect of `placedWidth` within a content box of
+ * `contentWidth`. Engine-owned and exported — the SHELL's paint and
+ * caret MUST import this function, never re-derive: placed[].rect.x,
+ * painted rects, and caret x agree by construction, not by
+ * convention. `center` of the PLACED rect, not the intrinsic; left by
+ * default. Un-clamped: a negative result is reachable only in
+ * degenerate geometry (a placed rect wider than the box), placed
+ * anyway per the R6 floor family.
+ */
+export function alignOffset(
+  align: 'left' | 'center' | 'right',
+  placedWidth: number,
+  contentWidth: number,
+): number {
+  if (align === 'center') return (contentWidth - placedWidth) / 2
+  if (align === 'right') return contentWidth - placedWidth
+  return 0
+}
+
+/**
+ * Image fit-down (E-IMG-1): the engine owns this math — the shell must
+ * never scale (a shell-side scale would be a second derivation,
+ * violating the two-sided law). Down-only, aspect-preserving: natural
+ * size when both axes fit the content box, else scale by the binding
+ * axis so BOTH fit. Degenerate guards, both commented at their sites:
+ * a zero-dim intrinsic degrades to 1×1, and the 1px floor is
+ * unreachable except in a degenerate content box.
+ */
+function imagePlacedSize(
+  width: number,
+  height: number,
+  contentWidth: number,
+  contentHeight: number,
+): { width: number; height: number } {
+  // ZERO-DIM GUARD (loud-seam family — NO throw): ANY non-positive or
+  // non-finite axis (per-axis trigger, not just both-zero — a 100×0
+  // image is as degenerate as a 0×0 one) degrades the WHOLE intrinsic
+  // to 1×1; the valid axis is not preserved, because half an image is
+  // not an image. ADAPTER CONTRACT: the shell should prevent zero-dim
+  // images before sending; this is the engine's deterministic
+  // backstop, never a license to send them.
+  const degenerate =
+    !(Number.isFinite(width) && width > 0) || !(Number.isFinite(height) && height > 0)
+  const w = degenerate ? 1 : width
+  const h = degenerate ? 1 : height
+  const scale = Math.min(contentWidth / w, contentHeight / h, 1)
+  let placedW = w * scale
+  let placedH = h * scale
+  // 1px FLOOR (R6 floor family): only reachable when the content box
+  // itself is degenerate (contentBox width or height <= 0 makes the
+  // scale 0) — a page/contentBox too small for any image still PLACES
+  // it, never loops. The aspect breaks only here, in geometry that
+  // cannot hold any image at all.
+  if (!(placedW > 0)) placedW = 1
+  if (!(placedH > 0)) placedH = 1
+  return { width: placedW, height: placedH }
 }
 
 // BOND LOOKAHEAD — predicts whether a block's FIRST line lands on the
@@ -691,6 +845,27 @@ function firstLineLands(
   return true
 }
 
+// Kind-agnostic output-page reads for the bond cascade: an ATOMIC
+// image block's outputs live in placedRects, not lineBoxes (images
+// never enter lines[]). Every block emits at least one output — a
+// text block always has lines, an image always has its one placed
+// rect — so the fallback chain is total. The image's single "line"
+// IS its rect for bond purposes (the ToF #31 dependency).
+function firstPageOfOutputs(out: {
+  lineBoxes: LineBox[]
+  placedRects: PlacedRect[]
+}): number {
+  return out.lineBoxes.length > 0
+    ? out.lineBoxes[0].pageIndex
+    : out.placedRects[0].pageIndex
+}
+
+function lastPageOfEntry(entry: WalkCacheEntry): number {
+  return entry.lineBoxes.length > 0
+    ? entry.lineBoxes[entry.lineBoxes.length - 1].pageIndex
+    : entry.placedRects[entry.placedRects.length - 1].pageIndex
+}
+
 // Cursor reconstruction: the walk applies a block's breakAfter close
 // AFTER placement as a cursor transform — the cached exitState is the
 // MACHINE exit. Every path that resumes the cursor from a cached exit
@@ -712,28 +887,41 @@ function bondExistsBetween(doc: SemanticDoc, i: number): boolean {
 }
 
 // The placement machine. PURE: a function of (block, LineResults,
-// entry state, content-box height, widow control, bond context, split
+// entry state, content-box size, widow control, bond context, split
 // backup) — the Markov property made physically true of the code.
 // `bonded` (an ACTIVE bond to the successor) preempts R3: when the
 // bond already relocates A's last line onto B's page, the widow
 // concern is void. `backupFinalSplit` is the one-shot shape-2 hook:
 // the FINAL fragment places one line fewer, so A's last line opens
 // the successor's page.
+// ATOMIC IMAGES (E-IMG-1): an image arrives as ONE synthetic
+// LineResult carrying its FINAL placed dims (fit-down already
+// applied — the engine owns that math), so the whole rule family
+// degenerates safely: R0 places it, R1/R6 close-or-floor, and R2/R3/
+// R-ATOMIC can never fire (n == 1). Exactly one placement decision,
+// never fragmented. The EMIT branch swaps the record kind: an image
+// produces a frozen PlacedRect (never a LineBox — images don't enter
+// lines[]), with rect.x from the shared alignOffset — the same
+// function the shell's paint/caret consume (M5.13). The indent family
+// is wrap geometry and is IGNORED for images; keepLines on an image
+// is vacuous by construction.
 function placeBlock(
   block: Block,
   results: readonly LineResult[],
   entryState: WalkState,
+  contentWidth: number,
   contentHeight: number,
   control: boolean,
   bonded: boolean,
   backupFinalSplit: boolean,
-): { lineBoxes: LineBox[]; breaks: FragmentBreak[]; exitState: WalkState } {
+): { lineBoxes: LineBox[]; breaks: FragmentBreak[]; placedRects: PlacedRect[]; exitState: WalkState } {
   const L = results.length
   // How many of THIS block's lines a fresh page holds — only the R4
   // exemption test and R-ATOMIC's n <= cap check consume it.
   const cap = countFitting(results, 0, contentHeight)
   const lineBoxes: LineBox[] = []
   const breaks: FragmentBreak[] = []
+  const placedRects: PlacedRect[] = []
   let { pageIndex, y } = entryState
 
   // SPACE-BEFORE (block entry, applied ONCE): the first line's top
@@ -761,21 +949,43 @@ function placeBlock(
   // validateIndentGeometry guarantees the line-0 edge is ≥ 0.
   const baseLeft = block.indentLeft ?? 0
   const firstLeft = baseLeft + (block.firstLineIndent ?? 0)
+  // IMAGE EMIT GEOMETRY: align positions the PLACED rect within the
+  // full content box via the shared alignOffset (center of the placed
+  // rect, not the intrinsic). Computed once — an image is one line.
+  const imageLeft =
+    block.kind === 'image'
+      ? alignOffset(block.align ?? 'left', results[0].width, contentWidth)
+      : 0
   const place = (from: number, count: number): void => {
     for (let i = from; i < from + count; i++) {
       const result = results[i]
-      lineBoxes.push(
-        freezeLineBox({
-          blockId: block.id,
-          lineIndex: i,
-          pageIndex,
-          rect: { x: i === 0 ? firstLeft : baseLeft, y, width: result.width, height: result.height },
-          baseline: result.baseline,
-          rangeStart: result.start,
-          rangeEnd: result.end,
-          segments: result.segments,
-        }),
-      )
+      if (block.kind === 'image') {
+        // The ATOMIC emit: a PlacedRect, never a LineBox. src/alt are
+        // opaque echoes — the engine never interprets them.
+        placedRects.push(
+          freezePlacedRect({
+            blockId: block.id,
+            kind: 'image',
+            src: block.src,
+            alt: block.alt,
+            pageIndex,
+            rect: { x: imageLeft, y, width: result.width, height: result.height },
+          }),
+        )
+      } else {
+        lineBoxes.push(
+          freezeLineBox({
+            blockId: block.id,
+            lineIndex: i,
+            pageIndex,
+            rect: { x: i === 0 ? firstLeft : baseLeft, y, width: result.width, height: result.height },
+            baseline: result.baseline,
+            rangeStart: result.start,
+            rangeEnd: result.end,
+            segments: result.segments,
+          }),
+        )
+      }
       y += result.height
       hasContent = true
     }
@@ -848,7 +1058,16 @@ function placeBlock(
   // a page itself — only a line placement ever closes pages.
   y += block.spaceAfter ?? 0
 
-  return { lineBoxes, breaks, exitState: { pageIndex, y } }
+  return { lineBoxes, breaks, placedRects, exitState: { pageIndex, y } }
+}
+
+// Enforced immutability at creation: freeze the record and its rect
+// (leaf records — idempotent, one-time cost). Same posture as
+// freezeLineBox: emitted PlacedRects are shared zero-copy across
+// results and the walk cache.
+function freezePlacedRect(placed: PlacedRect): PlacedRect {
+  Object.freeze(placed.rect)
+  return Object.freeze(placed)
 }
 
 // Enforced immutability at creation: freeze the record, its rect, and
@@ -865,15 +1084,21 @@ function sameState(a: WalkState, b: WalkState): boolean {
 }
 
 // contentHash covers everything that determines a block's lines and
-// placement: kind (all three kinds produce lines — and kind also
-// routes the BREAKER: codeBlock vs prose semantics), runs (text +
-// style), flow (keepLines/widowControl/bonds/forced breaks), the
-// block-tier spacing (spaceBefore/spaceAfter — undefined-valued keys
-// are dropped by stableStringify, so absent ≡ unset bit-for-bit), and
-// the block-tier indent family (indentLeft/indentRight/firstLineIndent
-// — placement-relevant geometry: they set both wrap widths and the
-// per-line left edges). An
-// id is NOT part of the hash — it is compared separately.
+// placement: kind (all four kinds — and kind also routes the BREAKER
+// and the EMIT: codeBlock vs prose semantics, image = atomic
+// PlacedRect), runs (text + style), flow (keepLines/widowControl/
+// bonds/forced breaks), the block-tier spacing (spaceBefore/
+// spaceAfter — undefined-valued keys are dropped by stableStringify,
+// so absent ≡ unset bit-for-bit), and the block-tier indent family
+// (indentLeft/indentRight/firstLineIndent — placement geometry for
+// text; for images they are IGNORED at placement but hash-covered
+// anyway: uniform and conservative — an indent edit re-walks, never
+// mis-splices). For IMAGES the hash covers src + width + height +
+// align (the placement-relevant rule) AND alt: OPAQUE FIELDS
+// PARTICIPATE WHEN THEY ECHO INTO OUTPUT — cache-relevance, not
+// geometry-relevance, is the rule (placed[] echoes src and alt; a
+// spliced-past alt edit would serve a stale echo and break parity).
+// An id is NOT part of the hash — it is compared separately.
 //
 // IDENTITY CACHE: hashes are memoized on the block
 // OBJECT. ADAPTER CONTRACT: the shell must reuse unchanged Block
@@ -889,16 +1114,30 @@ const blockHashCache = new WeakMap<Block, string>()
 function hashBlock(block: Block): string {
   let hash = blockHashCache.get(block)
   if (hash === undefined) {
-    hash = stableStringify({
+    const base = {
       kind: block.kind,
-      runs: block.runs.map((run) => ({ text: run.text, style: run.style })),
       flow: block.flow,
       spaceBefore: block.spaceBefore,
       spaceAfter: block.spaceAfter,
       indentLeft: block.indentLeft,
       indentRight: block.indentRight,
       firstLineIndent: block.firstLineIndent,
-    })
+    }
+    hash = stableStringify(
+      block.kind === 'image'
+        ? {
+            ...base,
+            src: block.src,
+            width: block.width,
+            height: block.height,
+            align: block.align,
+            alt: block.alt,
+          }
+        : {
+            ...base,
+            runs: block.runs.map((run) => ({ text: run.text, style: run.style })),
+          },
+    )
     blockHashCache.set(block, hash)
     hashCallCount += 1
   }

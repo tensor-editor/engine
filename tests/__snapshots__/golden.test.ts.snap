@@ -253,6 +253,7 @@ exports[`golden: 10-line fontSize-100 block across two pages (FakeMetrics) > sli
       },
     },
   ],
+  "placed": [],
   "version": 1,
 }
 `;
@@ -672,6 +673,355 @@ exports[`golden: bonded heading flagship (FakeMetrics) > 5/7/5: filler strands, 
       },
     },
   ],
+  "placed": [],
+  "version": 1,
+}
+`;
+
+exports[`golden: fit-down landscape image (FakeMetrics) > scales to contentWidth preserving aspect; the following block accounts for the scaled height 1`] = `
+{
+  "breaks": [],
+  "lines": [
+    {
+      "baseline": 13.6,
+      "blockId": "tail",
+      "lineIndex": 0,
+      "pageIndex": 0,
+      "rangeEnd": 21,
+      "rangeStart": 0,
+      "rect": {
+        "height": 17.6,
+        "width": 210,
+        "x": 0,
+        "y": 150,
+      },
+      "segments": [
+        {
+          "end": 21,
+          "runIndex": 0,
+          "start": 0,
+        },
+      ],
+    },
+  ],
+  "pages": [
+    {
+      "contentBox": {
+        "height": 864,
+        "width": 624,
+        "x": 96,
+        "y": 96,
+      },
+      "index": 0,
+      "size": {
+        "height": 1056,
+        "width": 816,
+        "x": 0,
+        "y": 0,
+      },
+    },
+  ],
+  "placed": [
+    {
+      "alt": "A wide landscape",
+      "blockId": "img",
+      "kind": "image",
+      "pageIndex": 0,
+      "rect": {
+        "height": 150,
+        "width": 624,
+        "x": 0,
+        "y": 0,
+      },
+      "src": "media://abc123",
+    },
+  ],
+  "version": 1,
+}
+`;
+
+exports[`golden: image keepNext caption bond (FakeMetrics) > 7/1/1: filler fills page 0, the bonded image moves fresh, the caption follows 1`] = `
+{
+  "breaks": [],
+  "lines": [
+    {
+      "baseline": 85,
+      "blockId": "filler",
+      "lineIndex": 0,
+      "pageIndex": 0,
+      "rangeEnd": 59,
+      "rangeStart": 0,
+      "rect": {
+        "height": 110,
+        "width": 590,
+        "x": 0,
+        "y": 0,
+      },
+      "segments": [
+        {
+          "end": 59,
+          "runIndex": 0,
+          "start": 0,
+        },
+      ],
+    },
+    {
+      "baseline": 85,
+      "blockId": "filler",
+      "lineIndex": 1,
+      "pageIndex": 0,
+      "rangeEnd": 119,
+      "rangeStart": 60,
+      "rect": {
+        "height": 110,
+        "width": 590,
+        "x": 0,
+        "y": 110,
+      },
+      "segments": [
+        {
+          "end": 119,
+          "runIndex": 0,
+          "start": 60,
+        },
+      ],
+    },
+    {
+      "baseline": 85,
+      "blockId": "filler",
+      "lineIndex": 2,
+      "pageIndex": 0,
+      "rangeEnd": 179,
+      "rangeStart": 120,
+      "rect": {
+        "height": 110,
+        "width": 590,
+        "x": 0,
+        "y": 220,
+      },
+      "segments": [
+        {
+          "end": 179,
+          "runIndex": 0,
+          "start": 120,
+        },
+      ],
+    },
+    {
+      "baseline": 85,
+      "blockId": "filler",
+      "lineIndex": 3,
+      "pageIndex": 0,
+      "rangeEnd": 239,
+      "rangeStart": 180,
+      "rect": {
+        "height": 110,
+        "width": 590,
+        "x": 0,
+        "y": 330,
+      },
+      "segments": [
+        {
+          "end": 239,
+          "runIndex": 0,
+          "start": 180,
+        },
+      ],
+    },
+    {
+      "baseline": 85,
+      "blockId": "filler",
+      "lineIndex": 4,
+      "pageIndex": 0,
+      "rangeEnd": 299,
+      "rangeStart": 240,
+      "rect": {
+        "height": 110,
+        "width": 590,
+        "x": 0,
+        "y": 440,
+      },
+      "segments": [
+        {
+          "end": 299,
+          "runIndex": 0,
+          "start": 240,
+        },
+      ],
+    },
+    {
+      "baseline": 85,
+      "blockId": "filler",
+      "lineIndex": 5,
+      "pageIndex": 0,
+      "rangeEnd": 359,
+      "rangeStart": 300,
+      "rect": {
+        "height": 110,
+        "width": 590,
+        "x": 0,
+        "y": 550,
+      },
+      "segments": [
+        {
+          "end": 359,
+          "runIndex": 0,
+          "start": 300,
+        },
+      ],
+    },
+    {
+      "baseline": 85,
+      "blockId": "filler",
+      "lineIndex": 6,
+      "pageIndex": 0,
+      "rangeEnd": 420,
+      "rangeStart": 360,
+      "rect": {
+        "height": 110,
+        "width": 600,
+        "x": 0,
+        "y": 660,
+      },
+      "segments": [
+        {
+          "end": 420,
+          "runIndex": 0,
+          "start": 360,
+        },
+      ],
+    },
+    {
+      "baseline": 13.6,
+      "blockId": "caption",
+      "lineIndex": 0,
+      "pageIndex": 1,
+      "rangeEnd": 9,
+      "rangeStart": 0,
+      "rect": {
+        "height": 17.6,
+        "width": 90,
+        "x": 0,
+        "y": 90,
+      },
+      "segments": [
+        {
+          "end": 9,
+          "runIndex": 0,
+          "start": 0,
+        },
+      ],
+    },
+  ],
+  "pages": [
+    {
+      "contentBox": {
+        "height": 864,
+        "width": 624,
+        "x": 96,
+        "y": 96,
+      },
+      "index": 0,
+      "size": {
+        "height": 1056,
+        "width": 816,
+        "x": 0,
+        "y": 0,
+      },
+    },
+    {
+      "contentBox": {
+        "height": 864,
+        "width": 624,
+        "x": 96,
+        "y": 96,
+      },
+      "index": 1,
+      "size": {
+        "height": 1056,
+        "width": 816,
+        "x": 0,
+        "y": 0,
+      },
+    },
+  ],
+  "placed": [
+    {
+      "alt": "A bonded figure",
+      "blockId": "img",
+      "kind": "image",
+      "pageIndex": 1,
+      "rect": {
+        "height": 90,
+        "width": 90,
+        "x": 0,
+        "y": 0,
+      },
+      "src": "media://bonded",
+    },
+  ],
+  "version": 1,
+}
+`;
+
+exports[`golden: natural-size image + walk flow (FakeMetrics) > places the intrinsic rect and continues the walk below it 1`] = `
+{
+  "breaks": [],
+  "lines": [
+    {
+      "baseline": 13.6,
+      "blockId": "tail",
+      "lineIndex": 0,
+      "pageIndex": 0,
+      "rangeEnd": 16,
+      "rangeStart": 0,
+      "rect": {
+        "height": 17.6,
+        "width": 160,
+        "x": 0,
+        "y": 100,
+      },
+      "segments": [
+        {
+          "end": 16,
+          "runIndex": 0,
+          "start": 0,
+        },
+      ],
+    },
+  ],
+  "pages": [
+    {
+      "contentBox": {
+        "height": 864,
+        "width": 624,
+        "x": 96,
+        "y": 96,
+      },
+      "index": 0,
+      "size": {
+        "height": 1056,
+        "width": 816,
+        "x": 0,
+        "y": 0,
+      },
+    },
+  ],
+  "placed": [
+    {
+      "alt": "A small photograph",
+      "blockId": "img",
+      "kind": "image",
+      "pageIndex": 0,
+      "rect": {
+        "height": 100,
+        "width": 200,
+        "x": 0,
+        "y": 0,
+      },
+      "src": "media://e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    },
+  ],
   "version": 1,
 }
 `;
@@ -719,6 +1069,7 @@ exports[`golden: single paragraph on a Letter page (FakeMetrics) > produces one 
       },
     },
   ],
+  "placed": [],
   "version": 1,
 }
 `;

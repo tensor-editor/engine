@@ -128,7 +128,7 @@ export interface FlowPolicy {
 
 export interface BlockBase {
   id: string
-  kind: 'paragraph' | 'heading' | 'codeBlock'
+  kind: 'paragraph' | 'heading' | 'codeBlock' | 'image'
   flow?: FlowPolicy
   /**
    * Vertical space (px) above the block's first line. Applied ONCE at
@@ -204,7 +204,37 @@ export interface CodeBlockBlock extends BlockBase {
   runs: Run[]
 }
 
-export type Block = ParagraphBlock | HeadingBlock | CodeBlockBlock
+export type Block = ParagraphBlock | HeadingBlock | CodeBlockBlock | ImageBlock
+
+/**
+ * ATOMIC VISUAL BLOCK — image. Never fragmented, never line-broken:
+ * exactly ONE placement decision in the walk (a single synthetic "line"
+ * internally). src is OPAQUE: the engine never resolves or loads it —
+ * in Tensor it is 'media://<sha256>', but the engine treats it as an
+ * uninterpreted string that only echoes through to placed[]. The
+ * intrinsic width/height are REQUIRED DOCUMENT DATA (the adapter
+ * supplies them; the engine never fetches anything at layout time).
+ * Two-sided law: the SHELL must never compute layout — a shell-side
+ * scale would be a second derivation; the engine owns this math and
+ * emits the FINAL placed dims in placed[]. The indent family is wrap
+ * geometry and is IGNORED for images (they don't wrap); `align` is
+ * their horizontal control, relative to the full content box
+ * (Word: a centered image centers on the column, not the indented
+ * text edge). keepLines on an image is vacuous by construction —
+ * atomicity is structural, not a keepLines special case.
+ */
+export interface ImageBlock extends BlockBase {
+  kind: 'image'
+  /** OPAQUE — never resolved or loaded; echoes through to placed[]. */
+  src: string
+  /** Intrinsic px, REQUIRED document data, never fetched at layout time. */
+  width: number
+  height: number
+  /** Default 'left'. Positions the placed rect via the shared alignOffset. */
+  align?: 'left' | 'center' | 'right'
+  /** OPAQUE echo — a11y metadata, never rendered by the engine. */
+  alt: string
+}
 
 export interface SemanticDoc {
   blocks: Block[]
@@ -301,15 +331,44 @@ export interface LastStats {
 }
 
 /**
- * Treat as immutable. The engine shares cached LineBox/FragmentBreak
- * objects across results (zero-copy); callers mutating them corrupt
- * the cache AND parity. Emitted records are Object.freeze'd.
+ * One ATOMIC VISUAL block's placement — images now; horizontalRule may
+ * migrate to this array later (do not assume kind is only 'image').
+ * Field set designed so FLOATS (a future session) extend it additively
+ * with z. Order discipline: placed[] follows DOCUMENT order, exactly
+ * like lines[] — a sibling array, never interleaved with it; consumers
+ * merge the two by (pageIndex, rect.y). Images never appear in lines[].
+ * Edit survival: echoes (src, alt) are the adapter's stable strings;
+ * the rect is recomputed every layout (positional, like LineBox.rect).
+ */
+export interface PlacedRect {
+  /** Edit survival: author-assigned, stable across edits by contract. */
+  blockId: string
+  kind: 'image'
+  /** OPAQUE echo of ImageBlock.src. */
+  src: string
+  /** OPAQUE echo of ImageBlock.alt — cache-relevant: it rides contentHash. */
+  alt: string
+  pageIndex: number
+  /** Relative to the page content box — same frame as LineBox.rect. */
+  rect: Rect
+}
+
+/**
+ * Treat as immutable. The engine shares cached LineBox/FragmentBreak/
+ * PlacedRect objects across results (zero-copy); callers mutating them
+ * corrupt the cache AND parity. Emitted records are Object.freeze'd.
  */
 export interface LayoutResult {
   pages: PageGeometry[]
   /** Document order. */
   lines: LineBox[]
   breaks: FragmentBreak[]
+  /**
+   * Document order. One entry per atomic visual block (images now);
+   * floats will extend this array additively. Sibling of lines[] —
+   * consumers merge by (pageIndex, rect.y).
+   */
+  placed: PlacedRect[]
   /**
    * Cheap staleness signal, NOT a guarantee of change. Bumps ONLY when
    * a call performed any re-break/re-walk; a fully-cache-served call

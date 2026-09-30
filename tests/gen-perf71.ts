@@ -9,7 +9,13 @@
  *   npx -y tsx tests/gen-perf71.ts
  * (paths resolve against this file's location either way)
  */
-import { createLayoutEngine, type Block, type SemanticDoc, type LayoutOptions } from '../src/index.js'
+import {
+  createLayoutEngine,
+  type HeadingBlock,
+  type ParagraphBlock,
+  type SemanticDoc,
+  type LayoutOptions,
+} from '../src/index.js'
 import { FakeMetrics } from './fake-metrics.js'
 import { writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -45,7 +51,9 @@ function words(count: number): string {
 const STYLE = { fontFamily: 'Test Sans', fontSize: 16 }
 const BOLD = { ...STYLE, bold: true }
 
-function nextBlock(i: number): Block {
+// Text blocks only (E-IMG-1 note: the perf fixture predates image
+// blocks and stays text-only — regenerating it is a separate decision).
+function nextBlock(i: number): ParagraphBlock | HeadingBlock {
   if (i % 14 === 0) {
     const level = (i % 42 === 0 ? 1 : i % 21 === 0 ? 2 : 3)
     return {
@@ -79,7 +87,7 @@ function nextBlock(i: number): Block {
   }
 }
 
-const blocks: Block[] = []
+const blocks: (ParagraphBlock | HeadingBlock)[] = []
 let i = 0
 // Main fill: append until page 70 is reached, then single-line
 // paragraphs walk it to exactly 71 (never overshoot: 1 line = +1 page
