@@ -1,29 +1,36 @@
 {
   "name": "@tensor-editor/engine",
-  "version": "0.0.1",
-  "description": "Headless document layout engine for the Tensor editor: semantic blocks in, positioned pages and line boxes out.",
+  "version": "0.1.0",
   "type": "module",
   "license": "AGPL-3.0-only",
-  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "github:tensor-editor/engine"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "development": "./src/index.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
     }
   },
   "files": [
-    "dist",
-    "ARCHITECTURE.md",
-    "LICENSE"
+    "dist"
   ],
+  "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "tsup && tsc src/index.ts --ignoreConfig --declaration --emitDeclarationOnly --outDir dist --moduleResolution bundler --module esnext --target es2022 --strict --skipLibCheck",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "devDependencies": {
-    "@types/node": "^24.13.6",
-    "typescript": "^7.0.2",
-    "vitest": "^5.0.1"
+    "@types/node": "^26.6.3",
+    "tsup": "^8.5.1",
+    "vitest": "^5.0.1",
+    "typescript": "^7.0.2"
   }
 }
